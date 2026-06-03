@@ -76,8 +76,15 @@ def render_front_view(
     point_size: int = 1,
     z_min_clamp: float | None = None,
     z_max_clamp: float | None = None,
+    h_fov: float = 90.0,
+    min_depth: float = 0.1,
 ) -> Image.Image:
-    """Render a front-view (XZ) projection of *points* into an RGBA image.
+    """Render a perspective (pinhole-camera) front view of *points*.
+
+    The camera sits at the origin looking in the +Y direction.  A **fixed**
+    horizontal field of view (h_fov) defines a stable frustum so the image
+    never bounces or rescales between frames.  The vertical FOV is derived
+    from h_fov and the image aspect ratio so every pixel is square.
 
     Parameters
     ----------
@@ -86,77 +93,78 @@ def render_front_view(
     img_w, img_h:
         Output image dimensions in pixels.
     point_size:
-        Radius of each rendered point in pixels (>= 1). Values above 1
-        dilate each pixel outward using a square maximum filter.
+        Radius of each rendered point in pixels (>= 1).
     z_min_clamp, z_max_clamp:
-        Explicit Z range for the colour map.  Points outside this range are
-        clamped to the nearest colour stop.  When either value is None the
-        range is derived automatically from the data in the current frame.
-
-    Returns
-    -------
-    PIL.Image.Image (mode 'RGBA').
+        Explicit Z range for the colour map (None = auto from surviving data).
+    h_fov:
+        Horizontal field of view in degrees (default 90°).
+    min_depth:
+        Minimum Y distance; points at or behind this threshold are discarded.
     """
     if points is None or len(points) == 0:
         return Image.new('RGBA', (img_w, img_h), _BG_RGBA)
 
     x = points[:, 0].astype(np.float64)
+    y = points[:, 1].astype(np.float64)
     z = points[:, 2].astype(np.float64)
 
-    x_min, x_max = x.min(), x.max()
-    z_min, z_max = z.min(), z.max()
+    # ── Depth filter ──────────────────────────────────────────────────────
+    valid = y > min_depth
+    if not np.any(valid):
+        return Image.new('RGBA', (img_w, img_h), _BG_RGBA)
+    x, y, z = x[valid], y[valid], z[valid]
 
-    # Guard against degenerate (flat) point clouds
-    x_range = x_max - x_min if x_max != x_min else 1.0
-    z_range = z_max - z_min if z_max != z_min else 1.0
+    # ── Perspective projection ────────────────────────────────────────────
+    # Standard pinhole: u = X/Y (horizontal), v = Z/Y (vertical, +Z = up)
+    u = x / y
+    v = z / y
 
-    # Colour-map Z range: use user-supplied clamp values, fall back to auto
-    color_z_min = z_min_clamp if z_min_clamp is not None else z_min
-    color_z_max = z_max_clamp if z_max_clamp is not None else z_max
+    # Fixed frustum — half-tangents derived from FOV; never changes per-frame
+    tan_h = np.tan(np.radians(h_fov * 0.5))
+    tan_v = tan_h * (img_h / img_w)   # square pixels, no aspect distortion
+
+    # Frustum cull — discard anything outside the camera's view
+    in_fov = (u >= -tan_h) & (u <= tan_h) & (v >= -tan_v) & (v <= tan_v)
+    u, v, z = u[in_fov], v[in_fov], z[in_fov]
+    if len(u) == 0:
+        return Image.new('RGBA', (img_w, img_h), _BG_RGBA)
+
+    # ── Colour-map Z range ────────────────────────────────────────────────
+    color_z_min = z_min_clamp if z_min_clamp is not None else z.min()
+    color_z_max = z_max_clamp if z_max_clamp is not None else z.max()
     color_z_range = color_z_max - color_z_min if color_z_max != color_z_min else 1.0
 
-    # ── Rasterise: count points and accumulate Z per pixel bin ───────────
-    # Spatial binning uses the data extent so no pixels are wasted.
-    counts, x_edges, z_edges = np.histogram2d(
-        x, z,
-        bins=[img_w, img_h],
-        range=[[x_min, x_max], [z_min, z_max]],
-    )  # shape: (img_w, img_h)
-
-    # Accumulate normalised Z per pixel using the colour-map range
-    z_norm = np.clip((z - color_z_min) / color_z_range, 0.0, 1.0)
-    z_accum, _, _ = np.histogram2d(
-        x, z,
-        bins=[img_w, img_h],
-        range=[[x_min, x_max], [z_min, z_max]],
-        weights=z_norm,
+    # ── Rasterise via bincount (2-3× faster than histogram2d) ────────────
+    # u ∈ [-tan_h, tan_h] → column index [0, img_w-1]
+    # v ∈ [-tan_v, tan_v] → row    index [0, img_h-1]  (+v at top = row 0)
+    ix = np.clip(
+        ((u + tan_h) / (2.0 * tan_h) * img_w).astype(np.int32), 0, img_w - 1
+    )
+    iy = np.clip(
+        ((tan_v - v) / (2.0 * tan_v) * img_h).astype(np.int32), 0, img_h - 1
     )
 
+    flat_idx = iy * img_w + ix
+    n_pixels  = img_h * img_w
+
+    counts = np.bincount(flat_idx, minlength=n_pixels).astype(np.float64)
+    z_norm = np.clip((z - color_z_min) / color_z_range, 0.0, 1.0)
+    z_accum = np.bincount(flat_idx, weights=z_norm, minlength=n_pixels)
+
     occupied = counts > 0
-    avg_z = np.where(occupied, z_accum / np.where(occupied, counts, 1), 0.0)
+    avg_z    = np.where(occupied, z_accum / np.where(occupied, counts, 1.0), 0.0)
 
-    # ── Colour mapping ─────────────────────────────────────────────────────
-    # avg_z is already normalised; apply colourmap only to occupied pixels
-    flat_z = avg_z.flatten()
-    flat_occ = occupied.flatten()
+    # ── Colour mapping ────────────────────────────────────────────────────
+    pixel_rgba = np.full((n_pixels, 4), list(_BG_RGBA), dtype=np.uint8)
+    if occupied.any():
+        pixel_rgba[occupied] = _height_colormap(avg_z[occupied])
 
-    pixel_rgba = np.full((img_w * img_h, 4), list(_BG_RGBA), dtype=np.uint8)
-    if flat_occ.any():
-        pixel_rgba[flat_occ] = _height_colormap(flat_z[flat_occ])
+    # flat_idx = iy*img_w + ix  →  reshape directly to (img_h, img_w, 4);
+    # no transpose or axis-flip needed — iy already encodes +Z-at-top.
+    image = Image.fromarray(pixel_rgba.reshape(img_h, img_w, 4), mode='RGBA')
 
-    # Shape: (img_w, img_h, 4) — but PIL Image needs (height, width, 4)
-    # histogram2d returns (X bins, Z bins), so axis-0 = X (→ column), axis-1 = Z (→ row)
-    img_array = pixel_rgba.reshape(img_w, img_h, 4)
-
-    # Transpose so rows = Z axis (vertical), cols = X axis (horizontal)
-    # Also flip Z so positive-Z is at the top of the image
-    img_array = img_array.transpose(1, 0, 2)[::-1, :, :].copy()
-
-    image = Image.fromarray(img_array, mode='RGBA')
-
-    # Dilate points if size > 1: MaxFilter expands coloured pixels outward
     if point_size > 1:
-        kernel = 2 * point_size - 1  # always odd: 1→1, 2→3, 3→5 …
+        kernel = 2 * point_size - 1   # always odd: 1→1, 2→3, 3→5 …
         image = image.filter(ImageFilter.MaxFilter(kernel))
 
     return image
