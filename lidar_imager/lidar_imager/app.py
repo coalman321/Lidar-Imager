@@ -124,9 +124,13 @@ class LidarImagerApp(tk.Tk):
         self._bg_x_var = tk.StringVar(value='0')
         self._bg_y_var = tk.StringVar(value='0')
         self._name_var = tk.StringVar()
+        self._z_min_var = tk.StringVar()
+        self._z_max_var = tk.StringVar()
         self._custom_font_path: str | None = None
+        self._font_display: str = '(default)'  # display name for font button label
         self._text_color: str = '#ffffff'  # hex colour for name text
         self._fonts_cache: list[tuple[str, str]] | None = None
+        self._config_dlg: tk.Toplevel | None = None
 
         self.title('LiDAR Imager')
         self.configure(bg=_BG_COLOUR)
@@ -149,51 +153,25 @@ class LidarImagerApp(tk.Tk):
             bg='#333333', fg='white', relief=tk.FLAT,
             activebackground='#555555', activeforeground='white',
         )
-        self._freeze_btn.pack(side=tk.LEFT, padx=(0, 16))
+        self._freeze_btn.pack(side=tk.LEFT, padx=(0, 8))
 
-        tk.Label(toolbar, text='Z Min:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
-        self._z_min_var = tk.StringVar()
-        tk.Entry(
-            toolbar, textvariable=self._z_min_var, width=6,
-            bg='#333333', fg='white', insertbackground='white',
-            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
-        ).pack(side=tk.LEFT, padx=(2, 8))
-
-        tk.Label(toolbar, text='Z Max:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
-        self._z_max_var = tk.StringVar()
-        tk.Entry(
-            toolbar, textvariable=self._z_max_var, width=6,
-            bg='#333333', fg='white', insertbackground='white',
-            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
-        ).pack(side=tk.LEFT, padx=(2, 0))
-
-        tk.Label(toolbar, text='(blank = auto)', bg=_BG_COLOUR,
-                 fg='#666666', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(4, 0))
-        tk.Label(toolbar, text='Name:', bg=_BG_COLOUR, fg='white').pack(
-            side=tk.LEFT, padx=(16, 2)
-        )
-        tk.Entry(
-            toolbar, textvariable=self._name_var, width=18,
-            bg='#333333', fg='white', insertbackground='white',
-            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
-        ).pack(side=tk.LEFT, padx=(0, 0))
-
-        self._font_btn = tk.Button(
-            toolbar, text='Font: default', width=14,
-            command=self._pick_font,
+        tk.Button(
+            toolbar, text='Config', width=8,
+            command=self._open_config,
             bg='#333333', fg='white', relief=tk.FLAT,
             activebackground='#555555', activeforeground='white',
-        )
-        self._font_btn.pack(side=tk.LEFT, padx=(6, 4))
+        ).pack(side=tk.LEFT, padx=(0, 16))
 
-        self._color_swatch = tk.Button(
-            toolbar, text='  ', width=2,
-            command=self._pick_text_color,
-            bg=self._text_color, relief=tk.RAISED, bd=1,
+        tk.Label(toolbar, text='Name:', bg=_BG_COLOUR, fg='white').pack(
+            side=tk.LEFT, padx=(0, 2)
         )
-        self._color_swatch.pack(side=tk.LEFT, padx=(0, 0))
+        tk.Entry(
+            toolbar, textvariable=self._name_var, width=22,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+        ).pack(side=tk.LEFT)
 
-        # Point size slider (packed right-to-left so it stays near the export btn)
+        # Point size slider and export button (packed right-to-left)
         self._export_btn = tk.Button(
             toolbar, text='Export PNG', width=10,
             command=self._export_png,
@@ -215,69 +193,6 @@ class LidarImagerApp(tk.Tk):
             activebackground=_BG_COLOUR,
         )
         pt_slider.pack(side=tk.RIGHT)
-
-        # ── Export-folder bar ──────────────────────────────────────────────
-        folder_bar = tk.Frame(self, bg='#252525', pady=3, padx=8)
-        folder_bar.pack(side=tk.TOP, fill=tk.X)
-
-        tk.Button(
-            folder_bar, text='Set Export Folder', width=16,
-            command=self._set_export_folder,
-            bg='#333333', fg='white', relief=tk.FLAT,
-            activebackground='#555555', activeforeground='white',
-        ).pack(side=tk.LEFT, padx=(0, 8))
-
-        tk.Label(
-            folder_bar, text='Folder:', bg='#252525', fg='#888888',
-            font=('TkDefaultFont', 9),
-        ).pack(side=tk.LEFT)
-        tk.Label(
-            folder_bar, textvariable=self._export_dir_var,
-            bg='#252525', fg='#cccccc', font=('TkDefaultFont', 9),
-            anchor='w',
-        ).pack(side=tk.LEFT, padx=(4, 0))
-
-        # ── Background image bar ───────────────────────────────────────────
-        bg_bar = tk.Frame(self, bg='#1a1a2e', pady=3, padx=8)
-        bg_bar.pack(side=tk.TOP, fill=tk.X)
-
-        tk.Button(
-            bg_bar, text='Set Background', width=14,
-            command=self._set_background,
-            bg='#333355', fg='white', relief=tk.FLAT,
-            activebackground='#555577', activeforeground='white',
-        ).pack(side=tk.LEFT, padx=(0, 4))
-
-        tk.Button(
-            bg_bar, text='Clear', width=5,
-            command=self._clear_background,
-            bg='#333333', fg='white', relief=tk.FLAT,
-            activebackground='#555555', activeforeground='white',
-        ).pack(side=tk.LEFT, padx=(0, 12))
-
-        tk.Label(bg_bar, text='BG:', bg='#1a1a2e', fg='#888888',
-                 font=('TkDefaultFont', 9)).pack(side=tk.LEFT)
-        tk.Label(bg_bar, textvariable=self._bg_path_var,
-                 bg='#1a1a2e', fg='#cccccc', font=('TkDefaultFont', 9),
-                 anchor='w').pack(side=tk.LEFT, padx=(4, 16))
-
-        tk.Label(bg_bar, text='X:', bg='#1a1a2e', fg='white').pack(side=tk.LEFT)
-        tk.Entry(
-            bg_bar, textvariable=self._bg_x_var, width=6,
-            bg='#333333', fg='white', insertbackground='white',
-            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
-        ).pack(side=tk.LEFT, padx=(2, 8))
-
-        tk.Label(bg_bar, text='Y:', bg='#1a1a2e', fg='white').pack(side=tk.LEFT)
-        tk.Entry(
-            bg_bar, textvariable=self._bg_y_var, width=6,
-            bg='#333333', fg='white', insertbackground='white',
-            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
-        ).pack(side=tk.LEFT, padx=(2, 0))
-
-        tk.Label(bg_bar, text='px (top-left of 9:13 on background)',
-                 bg='#1a1a2e', fg='#666666',
-                 font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(6, 0))
 
         # ── Canvas area ────────────────────────────────────────────────────
         canvas_frame = tk.Frame(self, bg=_BG_COLOUR)
@@ -316,6 +231,134 @@ class LidarImagerApp(tk.Tk):
             bg='#2a2a2a', fg='#888888', font=('TkDefaultFont', 9),
             anchor='w',
         ).pack(fill=tk.X)
+
+    # ── Config popup ────────────────────────────────────────────────────────────
+
+    def _open_config(self) -> None:
+        """Open (or raise) the singleton configuration window."""
+        if self._config_dlg is not None and self._config_dlg.winfo_exists():
+            self._config_dlg.lift()
+            self._config_dlg.focus_force()
+            return
+
+        dlg = tk.Toplevel(self)
+        dlg.title('Configuration')
+        dlg.configure(bg=_BG_COLOUR)
+        dlg.geometry('500x400')
+        dlg.transient(self)
+        dlg.resizable(True, False)
+        self._config_dlg = dlg
+
+        def _sep(parent: tk.Frame, label: str) -> None:
+            """Draw a labelled horizontal separator."""
+            f = tk.Frame(parent, bg=_BG_COLOUR)
+            f.pack(fill=tk.X, padx=8, pady=(14, 4))
+            tk.Label(
+                f, text=label, bg=_BG_COLOUR, fg='#aaaaaa',
+                font=('TkDefaultFont', 8, 'bold'),
+            ).pack(side=tk.LEFT)
+            tk.Frame(f, bg='#444444', height=1).pack(
+                side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0)
+            )
+
+        body = tk.Frame(dlg, bg=_BG_COLOUR)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        # ── Z Range ───────────────────────────────────────────────────────
+        _sep(body, 'Z RANGE')
+        zf = tk.Frame(body, bg=_BG_COLOUR)
+        zf.pack(fill=tk.X, padx=20)
+        tk.Label(zf, text='Min:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        tk.Entry(
+            zf, textvariable=self._z_min_var, width=8,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+        ).pack(side=tk.LEFT, padx=(2, 14))
+        tk.Label(zf, text='Max:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        tk.Entry(
+            zf, textvariable=self._z_max_var, width=8,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+        ).pack(side=tk.LEFT, padx=(2, 10))
+        tk.Label(
+            zf, text='(blank = auto)', bg=_BG_COLOUR, fg='#666666',
+            font=('TkDefaultFont', 8),
+        ).pack(side=tk.LEFT)
+
+        # ── Export Folder ─────────────────────────────────────────────────
+        _sep(body, 'EXPORT FOLDER')
+        ef = tk.Frame(body, bg=_BG_COLOUR)
+        ef.pack(fill=tk.X, padx=20)
+        tk.Button(
+            ef, text='Set Folder', width=10,
+            command=self._set_export_folder,
+            bg='#333333', fg='white', relief=tk.FLAT,
+            activebackground='#555555', activeforeground='white',
+        ).pack(side=tk.LEFT)
+        tk.Label(
+            ef, textvariable=self._export_dir_var,
+            bg=_BG_COLOUR, fg='#cccccc', font=('TkDefaultFont', 9), anchor='w',
+        ).pack(side=tk.LEFT, padx=(10, 0))
+
+        # ── Background Image ──────────────────────────────────────────────
+        _sep(body, 'BACKGROUND IMAGE')
+        bgf = tk.Frame(body, bg=_BG_COLOUR)
+        bgf.pack(fill=tk.X, padx=20)
+        tk.Button(
+            bgf, text='Set Image', width=10,
+            command=self._set_background,
+            bg='#333355', fg='white', relief=tk.FLAT,
+            activebackground='#555577', activeforeground='white',
+        ).pack(side=tk.LEFT)
+        tk.Button(
+            bgf, text='Clear', width=6,
+            command=self._clear_background,
+            bg='#333333', fg='white', relief=tk.FLAT,
+            activebackground='#555555', activeforeground='white',
+        ).pack(side=tk.LEFT, padx=(4, 12))
+        tk.Label(
+            bgf, textvariable=self._bg_path_var,
+            bg=_BG_COLOUR, fg='#cccccc', font=('TkDefaultFont', 9), anchor='w',
+        ).pack(side=tk.LEFT)
+
+        off_f = tk.Frame(body, bg=_BG_COLOUR)
+        off_f.pack(fill=tk.X, padx=20, pady=(6, 0))
+        tk.Label(off_f, text='Offset  X:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        tk.Entry(
+            off_f, textvariable=self._bg_x_var, width=6,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+        ).pack(side=tk.LEFT, padx=(2, 14))
+        tk.Label(off_f, text='Y:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        tk.Entry(
+            off_f, textvariable=self._bg_y_var, width=6,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+        ).pack(side=tk.LEFT, padx=(2, 10))
+        tk.Label(
+            off_f, text='px  (top-left of 9:13 on background)',
+            bg=_BG_COLOUR, fg='#666666', font=('TkDefaultFont', 8),
+        ).pack(side=tk.LEFT)
+
+        # ── Text Overlay ──────────────────────────────────────────────────
+        _sep(body, 'TEXT OVERLAY')
+        tf = tk.Frame(body, bg=_BG_COLOUR)
+        tf.pack(fill=tk.X, padx=20)
+        self._font_btn = tk.Button(
+            tf, text=f'Font: {self._font_display}', width=18,
+            command=self._pick_font,
+            bg='#333333', fg='white', relief=tk.FLAT,
+            activebackground='#555555', activeforeground='white',
+        )
+        self._font_btn.pack(side=tk.LEFT)
+        self._color_swatch = tk.Button(
+            tf, text='  ', width=2,
+            command=self._pick_text_color,
+            bg=self._text_color, relief=tk.RAISED, bd=1,
+        )
+        self._color_swatch.pack(side=tk.LEFT, padx=(10, 4))
+        tk.Label(tf, text='Text colour', bg=_BG_COLOUR, fg='#888888',
+                 font=('TkDefaultFont', 9)).pack(side=tk.LEFT)
 
     # ── Live update loop ───────────────────────────────────────────────────────
 
@@ -555,6 +598,7 @@ class LidarImagerApp(tk.Tk):
             name, path = visible[sel[0]]
             self._custom_font_path = path  # None → resets to default
             label = '(default)' if path is None else name[:16]
+            self._font_display = label
             self._font_btn.config(text=f'Font: {label}')
             dlg.destroy()
 
