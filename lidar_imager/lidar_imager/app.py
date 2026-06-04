@@ -29,11 +29,11 @@ from __future__ import annotations
 
 import tkinter as tk
 from datetime import datetime
-from tkinter import filedialog, ttk
+from tkinter import colorchooser, filedialog, ttk
 from typing import TYPE_CHECKING
 
 import numpy as np
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 from .pointcloud_processor import (
     apply_ellipse_mask,
@@ -55,6 +55,56 @@ _CROP_COLOUR = '#00e5ff'   # overlay outline colour
 _CROP_WIDTH = 2            # overlay line width
 
 
+def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Return a TTF font at *size* pt, falling back to PIL's built-in."""
+    import os
+    candidates = [
+        '/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+        '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+        '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
+
+
+def _get_system_fonts() -> list[tuple[str, str]]:
+    """Return a sorted [(display_name, path)] list of every TTF/OTF font
+    found by fc-list on the system.  Returns [] if fc-list is unavailable."""
+    import os
+    import subprocess
+    try:
+        result = subprocess.run(
+            ['fc-list', '--format', '%{file}\t%{family}\t%{style}\n'],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    fonts: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for line in result.stdout.splitlines():
+        parts = line.split('\t')
+        path = parts[0].strip()
+        if not path.lower().endswith(('.ttf', '.otf')):
+            continue
+        if not os.path.isfile(path):
+            continue
+        family = parts[1].split(',')[0].strip() if len(parts) > 1 else ''
+        style  = parts[2].split(',')[0].strip() if len(parts) > 2 else ''
+        display = f'{family} {style}'.strip() if style else family
+        if not display:
+            display = os.path.splitext(os.path.basename(path))[0]
+        if path not in seen:
+            seen.add(path)
+            fonts.append((display, path))
+    return sorted(fonts, key=lambda x: x[0].lower())
+
+
 class LidarImagerApp(tk.Tk):
     """Main application window."""
 
@@ -69,9 +119,19 @@ class LidarImagerApp(tk.Tk):
         self._export_dir: str | None = None
         self._export_dir_var = tk.StringVar(value='(none — Export will prompt for folder)')
 
+        self._bg_image: Image.Image | None = None
+        self._bg_path_var = tk.StringVar(value='(none)')
+        self._bg_x_var = tk.StringVar(value='0')
+        self._bg_y_var = tk.StringVar(value='0')
+        self._name_var = tk.StringVar()
+        self._custom_font_path: str | None = None
+        self._text_color: str = '#ffffff'  # hex colour for name text
+        self._fonts_cache: list[tuple[str, str]] | None = None
+
         self.title('LiDAR Imager')
         self.configure(bg=_BG_COLOUR)
-        self.resizable(False, False)
+        self.resizable(True, True)
+        self.minsize(800, 560)
 
         self._build_ui()
         self._after_id = self.after(_REFRESH_MS, self._update_loop)
@@ -109,6 +169,29 @@ class LidarImagerApp(tk.Tk):
 
         tk.Label(toolbar, text='(blank = auto)', bg=_BG_COLOUR,
                  fg='#666666', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(4, 0))
+        tk.Label(toolbar, text='Name:', bg=_BG_COLOUR, fg='white').pack(
+            side=tk.LEFT, padx=(16, 2)
+        )
+        tk.Entry(
+            toolbar, textvariable=self._name_var, width=18,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+        ).pack(side=tk.LEFT, padx=(0, 0))
+
+        self._font_btn = tk.Button(
+            toolbar, text='Font: default', width=14,
+            command=self._pick_font,
+            bg='#333333', fg='white', relief=tk.FLAT,
+            activebackground='#555555', activeforeground='white',
+        )
+        self._font_btn.pack(side=tk.LEFT, padx=(6, 4))
+
+        self._color_swatch = tk.Button(
+            toolbar, text='  ', width=2,
+            command=self._pick_text_color,
+            bg=self._text_color, relief=tk.RAISED, bd=1,
+        )
+        self._color_swatch.pack(side=tk.LEFT, padx=(0, 0))
 
         # Point size slider (packed right-to-left so it stays near the export btn)
         self._export_btn = tk.Button(
@@ -154,32 +237,74 @@ class LidarImagerApp(tk.Tk):
             anchor='w',
         ).pack(side=tk.LEFT, padx=(4, 0))
 
+        # ── Background image bar ───────────────────────────────────────────
+        bg_bar = tk.Frame(self, bg='#1a1a2e', pady=3, padx=8)
+        bg_bar.pack(side=tk.TOP, fill=tk.X)
+
+        tk.Button(
+            bg_bar, text='Set Background', width=14,
+            command=self._set_background,
+            bg='#333355', fg='white', relief=tk.FLAT,
+            activebackground='#555577', activeforeground='white',
+        ).pack(side=tk.LEFT, padx=(0, 4))
+
+        tk.Button(
+            bg_bar, text='Clear', width=5,
+            command=self._clear_background,
+            bg='#333333', fg='white', relief=tk.FLAT,
+            activebackground='#555555', activeforeground='white',
+        ).pack(side=tk.LEFT, padx=(0, 12))
+
+        tk.Label(bg_bar, text='BG:', bg='#1a1a2e', fg='#888888',
+                 font=('TkDefaultFont', 9)).pack(side=tk.LEFT)
+        tk.Label(bg_bar, textvariable=self._bg_path_var,
+                 bg='#1a1a2e', fg='#cccccc', font=('TkDefaultFont', 9),
+                 anchor='w').pack(side=tk.LEFT, padx=(4, 16))
+
+        tk.Label(bg_bar, text='X:', bg='#1a1a2e', fg='white').pack(side=tk.LEFT)
+        tk.Entry(
+            bg_bar, textvariable=self._bg_x_var, width=6,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+        ).pack(side=tk.LEFT, padx=(2, 8))
+
+        tk.Label(bg_bar, text='Y:', bg='#1a1a2e', fg='white').pack(side=tk.LEFT)
+        tk.Entry(
+            bg_bar, textvariable=self._bg_y_var, width=6,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+        ).pack(side=tk.LEFT, padx=(2, 0))
+
+        tk.Label(bg_bar, text='px (top-left of 9:13 on background)',
+                 bg='#1a1a2e', fg='#666666',
+                 font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(6, 0))
+
         # ── Canvas area ────────────────────────────────────────────────────
         canvas_frame = tk.Frame(self, bg=_BG_COLOUR)
         canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8)
 
-        # Left: 9:13 preview with circle overlay
+        # Left: 9:13 preview
         left_frame = tk.Frame(canvas_frame, bg=_BG_COLOUR)
-        left_frame.pack(side=tk.LEFT, padx=(0, 4))
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
         tk.Label(left_frame, text='9:13 Preview', bg=_BG_COLOUR,
                  fg='#aaaaaa', font=('TkDefaultFont', 9)).pack()
         self._preview_canvas = tk.Canvas(
             left_frame, width=_PREVIEW_SIZE, height=_PREVIEW_SIZE,
             bg=_CANVAS_BG, highlightthickness=1, highlightbackground='#444444',
         )
-        self._preview_canvas.pack()
+        self._preview_canvas.pack(fill=tk.BOTH, expand=True)
         self._preview_photo: ImageTk.PhotoImage | None = None
 
         # Right: live circle crop
         right_frame = tk.Frame(canvas_frame, bg=_BG_COLOUR)
-        right_frame.pack(side=tk.LEFT, padx=(4, 0))
+        right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0))
         tk.Label(right_frame, text='Circle Crop', bg=_BG_COLOUR,
                  fg='#aaaaaa', font=('TkDefaultFont', 9)).pack()
         self._circle_canvas = tk.Canvas(
             right_frame, width=_PREVIEW_SIZE, height=_PREVIEW_SIZE,
             bg=_CANVAS_BG, highlightthickness=1, highlightbackground='#444444',
         )
-        self._circle_canvas.pack()
+        self._circle_canvas.pack(fill=tk.BOTH, expand=True)
         self._circle_photo: ImageTk.PhotoImage | None = None
 
         # ── Status bar ─────────────────────────────────────────────────────
@@ -307,6 +432,263 @@ class LidarImagerApp(tk.Tk):
         top = (h - d) // 2
         return (0, top, w, top + d)
 
+    # ── Font / colour pickers ──────────────────────────────────────────────────
+
+    def _pick_font(self) -> None:
+        """Open a searchable dialog listing all system fonts via fc-list."""
+        if self._fonts_cache is None:
+            self._status_var.set('Loading system fonts …')
+            self.update_idletasks()
+            self._fonts_cache = _get_system_fonts()
+        if not self._fonts_cache:
+            self._status_var.set(
+                'No system fonts found — ensure fontconfig (fc-list) is installed.'
+            )
+            return
+
+        # Prepend a "(default)" sentinel entry so users can reset
+        all_fonts: list[tuple[str, str | None]] = [('(default)', None)] + self._fonts_cache  # type: ignore[operator]
+
+        dlg = tk.Toplevel(self)
+        dlg.title('Select Font')
+        dlg.configure(bg=_BG_COLOUR)
+        dlg.geometry('440x540')
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.resizable(True, True)
+
+        # ── Search bar ────────────────────────────────────────────────────
+        tk.Label(dlg, text='Search:', bg=_BG_COLOUR, fg='white').pack(
+            anchor='w', padx=8, pady=(8, 2)
+        )
+        search_var = tk.StringVar()
+        tk.Entry(
+            dlg, textvariable=search_var,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+        ).pack(fill=tk.X, padx=8, pady=(0, 6))
+
+        # ── Font listbox ──────────────────────────────────────────────────
+        list_frame = tk.Frame(dlg, bg=_BG_COLOUR)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=8)
+
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        listbox = tk.Listbox(
+            list_frame, yscrollcommand=scrollbar.set,
+            bg='#222222', fg='white',
+            selectbackground='#005f87', selectforeground='white',
+            relief=tk.FLAT, bd=0, font=('TkDefaultFont', 10),
+            activestyle='none',
+        )
+        listbox.pack(fill=tk.BOTH, expand=True)
+        scrollbar.config(command=listbox.yview)
+
+        # Mutable list of currently visible (name, path) entries
+        visible: list[tuple[str, str | None]] = list(all_fonts)
+
+        def _repopulate(items: list) -> None:
+            listbox.delete(0, tk.END)
+            for name, _ in items:
+                listbox.insert(tk.END, f'  {name}')
+
+        _repopulate(visible)
+
+        def _on_search(*_) -> None:
+            q = search_var.get().lower()
+            visible.clear()
+            visible.extend((n, p) for n, p in all_fonts if q in n.lower())
+            _repopulate(visible)
+
+        search_var.trace_add('write', _on_search)
+
+        # ── Font preview canvas ───────────────────────────────────────────
+        preview_canvas = tk.Canvas(
+            dlg, height=52, bg='#111111', highlightthickness=1,
+            highlightbackground='#333333',
+        )
+        preview_canvas.pack(fill=tk.X, padx=8, pady=(6, 0))
+        _preview_photo: list = [None]  # keep reference to avoid GC
+
+        def _update_preview(*_) -> None:
+            sel = listbox.curselection()
+            preview_canvas.delete('all')
+            if not sel:
+                return
+            _, path = visible[sel[0]]
+            try:
+                font = ImageFont.truetype(path, 26) if path else _load_font(26)
+            except Exception:
+                preview_canvas.create_text(
+                    8, 26, text='(preview unavailable)',
+                    fill='#555555', anchor='w',
+                )
+                return
+            w = preview_canvas.winfo_width() or 420
+            img = Image.new('RGBA', (w, 52), (17, 17, 17, 255))
+            ImageDraw.Draw(img).text((8, 10), 'AaBbCc 123', font=font, fill=(255, 255, 255, 255))
+            photo = ImageTk.PhotoImage(img)
+            _preview_photo[0] = photo
+            preview_canvas.create_image(0, 0, anchor='nw', image=photo)
+
+        listbox.bind('<<ListboxSelect>>', _update_preview)
+
+        # ── Buttons ───────────────────────────────────────────────────────
+        count_var = tk.StringVar(value=f'{len(self._fonts_cache)} fonts found')
+        tk.Label(dlg, textvariable=count_var, bg=_BG_COLOUR,
+                 fg='#666666', font=('TkDefaultFont', 8)).pack(anchor='w', padx=8)
+
+        def _on_search_count(*_) -> None:
+            _on_search()
+            n = len([x for x in visible if x[1] is not None])
+            count_var.set(f'{n} fonts shown')
+
+        search_var.trace_add('write', _on_search_count)
+
+        btn_frame = tk.Frame(dlg, bg=_BG_COLOUR)
+        btn_frame.pack(fill=tk.X, padx=8, pady=8)
+
+        def _apply() -> None:
+            sel = listbox.curselection()
+            if not sel:
+                return
+            name, path = visible[sel[0]]
+            self._custom_font_path = path  # None → resets to default
+            label = '(default)' if path is None else name[:16]
+            self._font_btn.config(text=f'Font: {label}')
+            dlg.destroy()
+
+        tk.Button(
+            btn_frame, text='Cancel', width=8, command=dlg.destroy,
+            bg='#333333', fg='white', relief=tk.FLAT,
+            activebackground='#555555', activeforeground='white',
+        ).pack(side=tk.RIGHT, padx=(4, 0))
+        tk.Button(
+            btn_frame, text='OK', width=8, command=_apply,
+            bg='#005f87', fg='white', relief=tk.FLAT,
+            activebackground='#007aad', activeforeground='white',
+        ).pack(side=tk.RIGHT)
+
+        listbox.bind('<Double-1>', lambda _e: _apply())
+        dlg.bind('<Return>', lambda _e: _apply())
+        dlg.bind('<Escape>', lambda _e: dlg.destroy())
+
+    def _pick_text_color(self) -> None:
+        result = colorchooser.askcolor(color=self._text_color, title='Text colour')
+        if result[1] is None:
+            return
+        self._text_color = result[1]  # hex string e.g. '#ff8800'
+        self._color_swatch.config(bg=self._text_color)
+
+    def _get_name_font(
+        self, size: int
+    ) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+        """Load the user-selected font at *size*, falling back to the default."""
+        if self._custom_font_path:
+            try:
+                return ImageFont.truetype(self._custom_font_path, size)
+            except Exception:
+                pass
+        return _load_font(size)
+
+    def _text_fill(self, alpha: int = 230) -> tuple[int, int, int, int]:
+        """Return the current text colour as an RGBA tuple."""
+        c = self._text_color.lstrip('#')
+        return (int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16), alpha)
+
+    # ── Name overlay helpers ───────────────────────────────────────────────────
+
+    def _apply_name_to_rect(self, img: Image.Image) -> Image.Image:
+        """Return a copy of *img* with the user name drawn in the top half."""
+        name = self._name_var.get().strip()
+        if not name:
+            return img
+        out = img.convert('RGBA').copy()
+        draw = ImageDraw.Draw(out)
+        font_size = max(24, out.width // 14)
+        font = self._get_name_font(font_size)
+        bbox = draw.textbbox((0, 0), name, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        x = (out.width - tw) // 2
+        y = out.height // 8   # upper portion of image
+        # Dark outline for readability on any background
+        for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1), (0, -2), (0, 2), (-2, 0), (2, 0)):
+            draw.text((x + dx, y + dy), name, font=font, fill=(0, 0, 0, 200))
+        draw.text((x, y), name, font=font, fill=self._text_fill())
+        return out
+
+    def _make_circle_with_name(self, circle_img: Image.Image) -> Image.Image:
+        """Return *circle_img* with the user name panel placed to its right."""
+        name = self._name_var.get().strip()
+        if not name:
+            return circle_img
+        cw, ch = circle_img.size
+        panel_w = max(180, cw // 2)
+        # Start fully transparent so alpha_composite preserves the ellipse edges
+        out = Image.new('RGBA', (cw + panel_w, ch), (0, 0, 0, 0))
+        out.alpha_composite(circle_img.convert('RGBA'), dest=(0, 0))
+        # Fill only the text panel with an opaque background
+        draw = ImageDraw.Draw(out)
+        draw.rectangle((cw, 0, cw + panel_w - 1, ch - 1), fill=(0, 0, 0, 255))
+        font_size = max(20, panel_w // 7)
+        font = self._get_name_font(font_size)
+        bbox = draw.textbbox((0, 0), name, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        tx = cw + (panel_w - tw) // 2
+        ty = (ch - th) // 2
+        for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+            draw.text((tx + dx, ty + dy), name, font=font, fill=(0, 0, 0, 200))
+        draw.text((tx, ty), name, font=font, fill=self._text_fill())
+        return out
+
+    # ── Background image ───────────────────────────────────────────────────────
+
+    def _set_background(self) -> None:
+        """Open a file dialog to select a background PNG and load it."""
+        path = filedialog.askopenfilename(
+            title='Select background image',
+            filetypes=[('PNG images', '*.png'), ('All files', '*.*')],
+        )
+        if not path:
+            return
+        try:
+            self._bg_image = Image.open(path).convert('RGBA')
+            self._bg_image.load()  # decode immediately so the file handle can close
+            import os
+            self._bg_path_var.set(os.path.basename(path))
+            self._status_var.set(
+                f'Background loaded: {os.path.basename(path)}  '
+                f'({self._bg_image.width}×{self._bg_image.height} px)'
+            )
+        except Exception as exc:
+            self._status_var.set(f'Failed to load background: {exc}')
+
+    def _clear_background(self) -> None:
+        self._bg_image = None
+        self._bg_path_var.set('(none)')
+        self._status_var.set('Background cleared.')
+
+    def _composite_onto_bg(self, rect_img: Image.Image) -> Image.Image:
+        """Paste *rect_img* onto a copy of the background at the configured offset.
+
+        Returns the composited RGBA image, or *rect_img* unchanged if no
+        background has been loaded.
+        """
+        if self._bg_image is None:
+            return rect_img.convert('RGBA')
+        try:
+            ox = int(self._bg_x_var.get())
+        except ValueError:
+            ox = 0
+        try:
+            oy = int(self._bg_y_var.get())
+        except ValueError:
+            oy = 0
+        composite = self._bg_image.copy()
+        fg = rect_img.convert('RGBA')
+        composite.paste(fg, (ox, oy), fg)
+        return composite
+
     # ── Export folder ──────────────────────────────────────────────────────────
 
     def _set_export_folder(self) -> None:
@@ -344,8 +726,8 @@ class LidarImagerApp(tk.Tk):
         rect_path = f'{base}_9x13.png'
         circle_path = f'{base}_circle.png'
 
-        rect_src.convert('RGBA').save(rect_path, format='PNG')
-        circle_src.save(circle_path, format='PNG')
+        self._composite_onto_bg(self._apply_name_to_rect(rect_src)).save(rect_path, format='PNG')
+        self._make_circle_with_name(circle_src).save(circle_path, format='PNG')
 
         self._status_var.set(
             f'Exported → {rect_path}  +  {circle_path}'
