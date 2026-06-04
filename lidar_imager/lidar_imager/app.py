@@ -173,7 +173,7 @@ class LidarImagerApp(tk.Tk):
 
         # Point size slider and export button (packed right-to-left)
         self._export_btn = tk.Button(
-            toolbar, text='Export PNG', width=10,
+            toolbar, text='Export', width=10,
             command=self._export_png,
             bg='#005f87', fg='white', relief=tk.FLAT,
             activebackground='#007aad', activeforeground='white',
