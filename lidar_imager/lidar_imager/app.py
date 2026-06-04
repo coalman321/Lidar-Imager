@@ -116,9 +116,11 @@ class LidarImagerApp(tk.Tk):
         self._current_circle_image: Image.Image | None = None  # latest circle crop
         self._frozen_rect_image: Image.Image | None = None
         self._frozen_circle_image: Image.Image | None = None
-        self._export_dir: str | None = None
-        self._export_dir_var = tk.StringVar(value='(none — Export will prompt for folder)')
+        _default_export = ''
+        self._export_dir: str | None = _default_export
+        self._export_dir_var = tk.StringVar(value=_default_export)
 
+        _DEFAULT_BG = ''
         self._bg_image: Image.Image | None = None
         self._bg_path_var = tk.StringVar(value='(none)')
         self._bg_x_var = tk.StringVar(value='30')
@@ -129,9 +131,11 @@ class LidarImagerApp(tk.Tk):
         self._val_min_var = tk.StringVar()
         self._val_max_var = tk.StringVar()
         self._point_size = tk.IntVar(value=2)
-        self._custom_font_path: str | None = None
-        self._font_display: str = '(default)'  # display name for font button label
+        self._custom_font_path: str | None = '/usr/share/fonts/opentype/urw-base35/C059-Bold.otf'
+        self._font_display: str = 'C059 Bold'  # display name for font button label
         self._text_color: str = '#FFC500'  # hex colour for name text
+        self._name_x_offset = tk.IntVar(value=0)
+        self._name_y_offset = tk.IntVar(value=-85)
         self._fonts_cache: list[tuple[str, str]] | None = None
         self._config_dlg: tk.Toplevel | None = None
 
@@ -141,6 +145,7 @@ class LidarImagerApp(tk.Tk):
         self.minsize(800, 560)
 
         self._build_ui()
+        self.after(0, lambda: self._load_bg_from_path(_DEFAULT_BG))
         self._after_id = self.after(_REFRESH_MS, self._update_loop)
 
     # ── UI Construction ────────────────────────────────────────────────────────
@@ -407,6 +412,27 @@ class LidarImagerApp(tk.Tk):
         self._color_swatch.pack(side=tk.LEFT, padx=(10, 4))
         tk.Label(tf, text='Text colour', bg=_BG_COLOUR, fg='#888888',
                  font=('TkDefaultFont', 9)).pack(side=tk.LEFT)
+        # Name offset
+        nof = tk.Frame(body, bg=_BG_COLOUR)
+        nof.pack(fill=tk.X, padx=20, pady=(6, 0))
+        tk.Label(nof, text='Name offset  X:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        tk.Spinbox(
+            nof, textvariable=self._name_x_offset, from_=-2000, to=2000,
+            increment=1, width=6,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+            buttonbackground='#444444',
+        ).pack(side=tk.LEFT, padx=(2, 14))
+        tk.Label(nof, text='Y:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        tk.Spinbox(
+            nof, textvariable=self._name_y_offset, from_=-2000, to=2000,
+            increment=1, width=6,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+            buttonbackground='#444444',
+        ).pack(side=tk.LEFT, padx=(2, 10))
+        tk.Label(nof, text='px  (relative to centred position)',
+                 bg=_BG_COLOUR, fg='#666666', font=('TkDefaultFont', 8)).pack(side=tk.LEFT)
 
     # ── Live update loop ───────────────────────────────────────────────────────
 
@@ -703,8 +729,8 @@ class LidarImagerApp(tk.Tk):
         font = self._get_name_font(font_size)
         bbox = draw.textbbox((0, 0), name, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        x = (out.width - tw) // 2
-        y = out.height // 8   # upper portion of image
+        x = (out.width - tw) // 2 + self._name_x_offset.get()
+        y = out.height // 8 + self._name_y_offset.get()   # upper portion of image
         # Dark outline for readability on any background
         for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1), (0, -2), (0, 2), (-2, 0), (2, 0)):
             draw.text((x + dx, y + dy), name, font=font, fill=(0, 0, 0, 200))
@@ -737,6 +763,19 @@ class LidarImagerApp(tk.Tk):
 
     # ── Background image ───────────────────────────────────────────────────────
 
+    def _load_bg_from_path(self, path: str) -> None:
+        """Load *path* as the background image, updating state and status bar."""
+        try:
+            self._bg_image = Image.open(path).convert('RGBA')
+            self._bg_image.load()
+            self._bg_path_var.set(os.path.basename(path))
+            self._status_var.set(
+                f'Background loaded: {os.path.basename(path)}  '
+                f'({self._bg_image.width}×{self._bg_image.height} px)'
+            )
+        except Exception as exc:
+            self._status_var.set(f'Failed to load background: {exc}')
+
     def _set_background(self) -> None:
         """Open a file dialog to select a background PNG and load it."""
         path = filedialog.askopenfilename(
@@ -745,17 +784,7 @@ class LidarImagerApp(tk.Tk):
         )
         if not path:
             return
-        try:
-            self._bg_image = Image.open(path).convert('RGBA')
-            self._bg_image.load()  # decode immediately so the file handle can close
-            import os
-            self._bg_path_var.set(os.path.basename(path))
-            self._status_var.set(
-                f'Background loaded: {os.path.basename(path)}  '
-                f'({self._bg_image.width}×{self._bg_image.height} px)'
-            )
-        except Exception as exc:
-            self._status_var.set(f'Failed to load background: {exc}')
+        self._load_bg_from_path(path)
 
     def _clear_background(self) -> None:
         self._bg_image = None
