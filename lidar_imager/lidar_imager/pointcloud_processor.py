@@ -74,11 +74,13 @@ def render_front_view(
     img_w: int = 800,
     img_h: int = 800,
     point_size: int = 1,
-    z_min_clamp: float | None = None,
-    z_max_clamp: float | None = None,
     h_fov: float = 90.0,
     min_depth: float = 0.1,
+    color_mode: str = 'z',
+    val_min_clamp: float | None = None,
+    val_max_clamp: float | None = None,
 ) -> Image.Image:
+    """color_mode: 'z' | 'range' | 'x' | 'y'  — axis/metric used for the colourmap."""
     """Render a perspective (pinhole-camera) front view of *points*.
 
     The camera sits at the origin looking in the −X direction (the back
@@ -133,14 +135,33 @@ def render_front_view(
 
     # Frustum cull — discard anything outside the camera's view
     in_fov = (u >= -tan_h) & (u <= tan_h) & (v >= -tan_v) & (v <= tan_v)
-    u, v, z = u[in_fov], v[in_fov], z[in_fov]
+    u, v = u[in_fov], v[in_fov]
+    # Retain all raw coordinates for colour modes that need them
+    depth_fov = depth[in_fov]   # −x (positive = in front of camera)
+    y_fov     = y[in_fov]
+    z_fov     = z[in_fov]
     if len(u) == 0:
         return Image.new('RGBA', (img_w, img_h), _BG_RGBA)
 
-    # ── Colour-map Z range ────────────────────────────────────────────────
-    color_z_min = z_min_clamp if z_min_clamp is not None else z.min()
-    color_z_max = z_max_clamp if z_max_clamp is not None else z.max()
-    color_z_range = color_z_max - color_z_min if color_z_max != color_z_min else 1.0
+    # ── Select colour values based on mode ────────────────────────────────
+    # color_mode: 'z'     → vertical height (Z axis)
+    #             'range' → 3-D Euclidean distance from sensor
+    #             'x'     → depth along sensor-back axis (−X = depth_fov)
+    #             'y'     → lateral position (Y axis)
+    if color_mode == 'range':
+        color_vals = np.sqrt(depth_fov ** 2 + y_fov ** 2 + z_fov ** 2)
+    elif color_mode == 'x':
+        color_vals = depth_fov          # depth = −x, grows away from sensor
+    elif color_mode == 'y':
+        color_vals = y_fov
+    else:                               # default: 'z'
+        color_vals = z_fov
+
+    # z_min_clamp / z_max_clamp are the legacy Z-mode params;
+    # val_min_clamp / val_max_clamp are the generic overrides for any mode.
+    c_min = val_min_clamp if val_min_clamp is not None else color_vals.min()
+    c_max = val_max_clamp if val_max_clamp is not None else color_vals.max()
+    c_range = c_max - c_min if c_max != c_min else 1.0
 
     # ── Rasterise via bincount (2-3× faster than histogram2d) ────────────
     # u ∈ [-tan_h, tan_h] → column index [0, img_w-1]
@@ -155,12 +176,12 @@ def render_front_view(
     flat_idx = iy * img_w + ix
     n_pixels  = img_h * img_w
 
-    counts = np.bincount(flat_idx, minlength=n_pixels).astype(np.float64)
-    z_norm = np.clip((z - color_z_min) / color_z_range, 0.0, 1.0)
-    z_accum = np.bincount(flat_idx, weights=z_norm, minlength=n_pixels)
+    counts  = np.bincount(flat_idx, minlength=n_pixels).astype(np.float64)
+    c_norm  = np.clip((color_vals - c_min) / c_range, 0.0, 1.0)
+    c_accum = np.bincount(flat_idx, weights=c_norm, minlength=n_pixels)
 
     occupied = counts > 0
-    avg_z    = np.where(occupied, z_accum / np.where(occupied, counts, 1.0), 0.0)
+    avg_z    = np.where(occupied, c_accum / np.where(occupied, counts, 1.0), 0.0)
 
     # ── Colour mapping ────────────────────────────────────────────────────
     pixel_rgba = np.full((n_pixels, 4), list(_BG_RGBA), dtype=np.uint8)

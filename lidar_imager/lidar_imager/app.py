@@ -125,8 +125,9 @@ class LidarImagerApp(tk.Tk):
         self._bg_y_var = tk.StringVar(value='225')
         self._bg_scale_var = tk.DoubleVar(value=160.0)
         self._name_var = tk.StringVar()
-        self._z_min_var = tk.StringVar()
-        self._z_max_var = tk.StringVar()
+        self._color_mode = tk.StringVar(value='z')   # 'z' | 'range' | 'x' | 'y'
+        self._val_min_var = tk.StringVar()
+        self._val_max_var = tk.StringVar()
         self._point_size = tk.IntVar(value=2)
         self._custom_font_path: str | None = None
         self._font_display: str = '(default)'  # display name for font button label
@@ -276,23 +277,34 @@ class LidarImagerApp(tk.Tk):
         dlg.bind('<Button-5>', lambda e: _scroll_canvas.yview_scroll(1, 'units'))
 
         # ── Z Range ───────────────────────────────────────────────────────
-        _sep(body, 'Z RANGE')
-        zf = tk.Frame(body, bg=_BG_COLOUR)
-        zf.pack(fill=tk.X, padx=20)
-        tk.Label(zf, text='Min:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        _sep(body, 'COLOR MAPPING')
+        # ── Mode selection ────────────────────────────────────────────────
+        mode_f = tk.Frame(body, bg=_BG_COLOUR)
+        mode_f.pack(fill=tk.X, padx=20, pady=(0, 6))
+        for label, val in [('Z height', 'z'), ('Range', 'range'), ('X depth', 'x'), ('Y lateral', 'y')]:
+            tk.Radiobutton(
+                mode_f, text=label, variable=self._color_mode, value=val,
+                bg=_BG_COLOUR, fg='white', selectcolor='#333333',
+                activebackground=_BG_COLOUR, activeforeground='white',
+            ).pack(side=tk.LEFT, padx=(0, 10))
+        # ── Min / max clamp (applies to whichever mode is selected) ────────
+        tk.Label(body, text='Min / max  (blank = auto):', bg=_BG_COLOUR, fg='#aaaaaa',
+                 font=('TkDefaultFont', 8)).pack(anchor='w', padx=20, pady=(4, 0))
+        vf = tk.Frame(body, bg=_BG_COLOUR)
+        vf.pack(fill=tk.X, padx=20)
         tk.Entry(
-            zf, textvariable=self._z_min_var, width=8,
+            vf, textvariable=self._val_min_var, width=8,
             bg='#333333', fg='white', insertbackground='white',
             relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
-        ).pack(side=tk.LEFT, padx=(2, 14))
-        tk.Label(zf, text='Max:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        ).pack(side=tk.LEFT, padx=(0, 14))
+        tk.Label(vf, text='Max:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
         tk.Entry(
-            zf, textvariable=self._z_max_var, width=8,
+            vf, textvariable=self._val_max_var, width=8,
             bg='#333333', fg='white', insertbackground='white',
             relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
         ).pack(side=tk.LEFT, padx=(2, 10))
         tk.Label(
-            zf, text='(blank = auto)', bg=_BG_COLOUR, fg='#666666',
+            vf, text='(m or units)', bg=_BG_COLOUR, fg='#666666',
             font=('TkDefaultFont', 8),
         ).pack(side=tk.LEFT)
 
@@ -406,8 +418,9 @@ class LidarImagerApp(tk.Tk):
                 rendered = render_front_view(
                     points, _RENDER_SIZE, _RENDER_SIZE,
                     point_size=self._point_size.get(),
-                    z_min_clamp=self._parse_z('min'),
-                    z_max_clamp=self._parse_z('max'),
+                    color_mode=self._color_mode.get(),
+                    val_min_clamp=self._parse_val('min'),
+                    val_max_clamp=self._parse_val('max'),
                 )
                 rect_img = auto_crop_913(rendered)
                 circle_bbox = self._get_circle_bbox(rect_img)
@@ -488,9 +501,10 @@ class LidarImagerApp(tk.Tk):
             )
     # ── Z clamp helpers ────────────────────────────────────────────────────────
 
-    def _parse_z(self, which: str) -> float | None:
-        """Parse the Z min/max entry field; return None if blank or invalid."""
-        raw = (self._z_min_var if which == 'min' else self._z_max_var).get().strip()
+
+    def _parse_val(self, which: str) -> float | None:
+        """Parse the generic min/max field (range/X/Y); return None if blank or invalid."""
+        raw = (self._val_min_var if which == 'min' else self._val_max_var).get().strip()
         if not raw:
             return None
         try:
