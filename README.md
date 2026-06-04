@@ -22,3 +22,10 @@ The tool is configured via the configure button in the UI. The options include:
 - text font and color for the names in the pdf and png exports
 
 ![Configuration UI](./doc/config.png)
+
+## Exported formats
+The tool can export the projected point cloud in two formats:
+- PNG: A single image with the projected point cloud overlaid on a background image. Also includes a name for the point cloud, which can be customized.
+[PNG Export Example](./doc/png_export.png)
+- PDF: A single-page PDF with two circular crops of the projected point cloud, designed for printing. also includes a name for the point cloud, which can be customized.
+[PDF Export Example](./doc/pdf_export.png)
