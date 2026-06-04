@@ -81,7 +81,8 @@ def render_front_view(
 ) -> Image.Image:
     """Render a perspective (pinhole-camera) front view of *points*.
 
-    The camera sits at the origin looking in the +Y direction.  A **fixed**
+    The camera sits at the origin looking in the −X direction (the back
+    hemisphere of the Ouster sensor, spanning 90°→180°→270°).  A **fixed**
     horizontal field of view (h_fov) defines a stable frustum so the image
     never bounces or rescales between frames.  The vertical FOV is derived
     from h_fov and the image aspect ratio so every pixel is square.
@@ -89,7 +90,7 @@ def render_front_view(
     Parameters
     ----------
     points:
-        (N, 3) float32 array with columns X, Y, Z.
+        (N, 3) float32 array with columns X, Y, Z (Ouster frame).
     img_w, img_h:
         Output image dimensions in pixels.
     point_size:
@@ -99,7 +100,8 @@ def render_front_view(
     h_fov:
         Horizontal field of view in degrees (default 90°).
     min_depth:
-        Minimum Y distance; points at or behind this threshold are discarded.
+        Minimum distance along −X; points at or behind this threshold
+        (i.e. with x >= -min_depth) are discarded.
     """
     if points is None or len(points) == 0:
         return Image.new('RGBA', (img_w, img_h), _BG_RGBA)
@@ -109,15 +111,21 @@ def render_front_view(
     z = points[:, 2].astype(np.float64)
 
     # ── Depth filter ──────────────────────────────────────────────────────
-    valid = y > min_depth
+    # Camera looks down −X (back hemisphere, 90°→180°→270°).  Depth is −x
+    # and must be positive and beyond min_depth.
+    depth = -x
+    valid = depth > min_depth
     if not np.any(valid):
         return Image.new('RGBA', (img_w, img_h), _BG_RGBA)
-    x, y, z = x[valid], y[valid], z[valid]
+    depth, y, z = depth[valid], y[valid], z[valid]
 
     # ── Perspective projection ────────────────────────────────────────────
-    # Standard pinhole: u = X/Y (horizontal), v = Z/Y (vertical, +Z = up)
-    u = x / y
-    v = z / y
+    # Pinhole camera looking down −X.  Looking from behind the sensor toward
+    # the back, world-+Y (sensor left) appears on the image RIGHT, so the
+    # horizontal image axis is u = +y/depth.  Vertical axis is v = z/depth
+    # (+Z up).
+    u = y / depth
+    v = z / depth
 
     # Fixed frustum — half-tangents derived from FOV; never changes per-frame
     tan_h = np.tan(np.radians(h_fov * 0.5))

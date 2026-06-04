@@ -121,9 +121,9 @@ class LidarImagerApp(tk.Tk):
 
         self._bg_image: Image.Image | None = None
         self._bg_path_var = tk.StringVar(value='(none)')
-        self._bg_x_var = tk.StringVar(value='0')
-        self._bg_y_var = tk.StringVar(value='0')
-        self._bg_scale_var = tk.DoubleVar(value=100.0)
+        self._bg_x_var = tk.StringVar(value='30')
+        self._bg_y_var = tk.StringVar(value='225')
+        self._bg_scale_var = tk.DoubleVar(value=160.0)
         self._name_var = tk.StringVar()
         self._z_min_var = tk.StringVar()
         self._z_max_var = tk.StringVar()
@@ -232,9 +232,9 @@ class LidarImagerApp(tk.Tk):
         dlg = tk.Toplevel(self)
         dlg.title('Configuration')
         dlg.configure(bg=_BG_COLOUR)
-        dlg.geometry('500x400')
+        dlg.geometry('520x620')
         dlg.transient(self)
-        dlg.resizable(True, False)
+        dlg.resizable(True, True)
         self._config_dlg = dlg
 
         def _sep(parent: tk.Frame, label: str) -> None:
@@ -249,8 +249,31 @@ class LidarImagerApp(tk.Tk):
                 side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0)
             )
 
-        body = tk.Frame(dlg, bg=_BG_COLOUR)
-        body.pack(fill=tk.BOTH, expand=True)
+        # ── Scrollable body ───────────────────────────────────────────────
+        _scroll_canvas = tk.Canvas(dlg, bg=_BG_COLOUR, highlightthickness=0)
+        _scrollbar = tk.Scrollbar(dlg, orient=tk.VERTICAL, command=_scroll_canvas.yview)
+        _scroll_canvas.configure(yscrollcommand=_scrollbar.set)
+        _scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        _scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        body = tk.Frame(_scroll_canvas, bg=_BG_COLOUR)
+        _body_window = _scroll_canvas.create_window((0, 0), window=body, anchor='nw')
+
+        def _on_body_configure(event: tk.Event) -> None:
+            _scroll_canvas.configure(scrollregion=_scroll_canvas.bbox('all'))
+
+        def _on_canvas_configure(event: tk.Event) -> None:
+            _scroll_canvas.itemconfig(_body_window, width=event.width)
+
+        body.bind('<Configure>', _on_body_configure)
+        _scroll_canvas.bind('<Configure>', _on_canvas_configure)
+
+        # Mouse-wheel scrolling
+        def _on_mousewheel(event: tk.Event) -> None:
+            _scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+
+        dlg.bind('<MouseWheel>', _on_mousewheel)
+        dlg.bind('<Button-4>', lambda e: _scroll_canvas.yview_scroll(-1, 'units'))
+        dlg.bind('<Button-5>', lambda e: _scroll_canvas.yview_scroll(1, 'units'))
 
         # ── Z Range ───────────────────────────────────────────────────────
         _sep(body, 'Z RANGE')
