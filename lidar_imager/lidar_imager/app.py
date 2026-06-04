@@ -128,7 +128,7 @@ class LidarImagerApp(tk.Tk):
         self._z_max_var = tk.StringVar()
         self._custom_font_path: str | None = None
         self._font_display: str = '(default)'  # display name for font button label
-        self._text_color: str = '#ffffff'  # hex colour for name text
+        self._text_color: str = '#FFC500'  # hex colour for name text
         self._fonts_cache: list[tuple[str, str]] | None = None
         self._config_dlg: tk.Toplevel | None = None
 
