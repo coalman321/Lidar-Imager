@@ -745,11 +745,72 @@ class LidarImagerApp(tk.Tk):
 
     def _next_export_base(self) -> str:
         """Return a timestamped base path (no suffix/extension) in the export folder."""
-        import os
+        import os, re
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:19]  # ms precision
-        return os.path.join(self._export_dir, f'lidar_{stamp}')
+        name = self._name_var.get().strip()
+        name_part = ('_' + re.sub(r'[^\w]', '_', name).strip('_')) if name else ''
+        return os.path.join(self._export_dir, f'lidar_{stamp}{name_part}')
 
     # ── Export ─────────────────────────────────────────────────────────────────
+
+    def _export_circle_pdf(self, circle_src: Image.Image, base_path: str) -> str:
+        """Export a PDF containing two circles (2.25" and 1.25") plus name text.
+
+        Both circles are rendered from *circle_src* (RGBA, transparent outside
+        the ellipse) at 300 DPI so the printed sizes are exact.
+        Returns the saved PDF path.
+        """
+        DPI     = 300
+        LARGE_D = round(2.25 * DPI)   # 675 px  → 2.25" diameter
+        SMALL_D = round(1.25 * DPI)   # 375 px  → 1.25" diameter
+        MARGIN  = round(0.20 * DPI)   # 60 px   → 0.20" margin
+        GAP     = round(0.25 * DPI)   # 75 px   → 0.25" gap between circles
+
+        name = self._name_var.get().strip()
+        name_area = round(0.42 * DPI) if name else round(0.10 * DPI)
+
+        page_w = MARGIN + LARGE_D + GAP + SMALL_D + MARGIN
+        page_h = MARGIN + LARGE_D + name_area + MARGIN
+        page   = Image.new('RGB', (page_w, page_h), (255, 255, 255))
+
+        def _paste(src: Image.Image, diameter: int, x: int, y: int) -> None:
+            rgba  = src.convert('RGBA').resize((diameter, diameter), Image.LANCZOS)
+            patch = Image.new('RGB', (diameter, diameter), (255, 255, 255))
+            patch.paste(rgba.convert('RGB'), (0, 0), rgba)
+            page.paste(patch, (x, y))
+
+        # Large circle — left, top-aligned with margin
+        _paste(circle_src, LARGE_D, MARGIN, MARGIN)
+
+        # Small circle — right, vertically centred relative to large
+        _paste(
+            circle_src, SMALL_D,
+            MARGIN + LARGE_D + GAP,
+            MARGIN + (LARGE_D - SMALL_D) // 2,
+        )
+
+        # Name text — centred below both circles, scaled to fit
+        if name:
+            draw = ImageDraw.Draw(page)
+            font_size = round(0.25 * DPI)   # start ~75 px ≈ 18 pt
+            font = self._get_name_font(font_size)
+            max_w = page_w - 2 * MARGIN
+            while font_size > 20:
+                bbox = draw.textbbox((0, 0), name, font=font)
+                if (bbox[2] - bbox[0]) <= max_w:
+                    break
+                font_size -= 4
+                font = self._get_name_font(font_size)
+            bbox = draw.textbbox((0, 0), name, font=font)
+            tx = (page_w - (bbox[2] - bbox[0])) // 2
+            ty = MARGIN + LARGE_D + round(0.09 * DPI)
+            c  = self._text_color.lstrip('#')
+            fill = (int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16))
+            draw.text((tx, ty), name, font=font, fill=fill)
+
+        pdf_path = f'{base_path}_circles.pdf'
+        page.save(pdf_path, format='PDF', resolution=DPI)
+        return pdf_path
 
     def _export_png(self) -> None:
         rect_src = self._frozen_rect_image or self._current_rect_image
@@ -768,14 +829,11 @@ class LidarImagerApp(tk.Tk):
 
         base = self._next_export_base()
         rect_path = f'{base}_9x13.png'
-        circle_path = f'{base}_circle.png'
 
         self._composite_onto_bg(self._apply_name_to_rect(rect_src)).save(rect_path, format='PNG')
-        self._make_circle_with_name(circle_src).save(circle_path, format='PNG')
+        pdf_path = self._export_circle_pdf(circle_src, base)
 
-        self._status_var.set(
-            f'Exported → {rect_path}  +  {circle_path}'
-        )
+        self._status_var.set(f'Exported → {rect_path}  +  {pdf_path}')
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
