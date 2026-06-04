@@ -123,6 +123,7 @@ class LidarImagerApp(tk.Tk):
         self._bg_path_var = tk.StringVar(value='(none)')
         self._bg_x_var = tk.StringVar(value='0')
         self._bg_y_var = tk.StringVar(value='0')
+        self._bg_scale_var = tk.DoubleVar(value=100.0)
         self._name_var = tk.StringVar()
         self._z_min_var = tk.StringVar()
         self._z_max_var = tk.StringVar()
@@ -326,6 +327,18 @@ class LidarImagerApp(tk.Tk):
             off_f, text='px  (top-left of 9:13 on background)',
             bg=_BG_COLOUR, fg='#666666', font=('TkDefaultFont', 8),
         ).pack(side=tk.LEFT)
+
+        scale_f = tk.Frame(body, bg=_BG_COLOUR)
+        scale_f.pack(fill=tk.X, padx=20, pady=(4, 0))
+        tk.Label(scale_f, text='Scale %:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        tk.Scale(
+            scale_f, variable=self._bg_scale_var,
+            from_=10, to=400, resolution=5, orient=tk.HORIZONTAL,
+            length=220, showvalue=True,
+            bg=_BG_COLOUR, fg='white', troughcolor='#444444',
+            highlightthickness=0, bd=0,
+            activebackground=_BG_COLOUR,
+        ).pack(side=tk.LEFT, padx=(4, 0))
         # ── Point Size ───────────────────────────────────────────────
         _sep(body, 'POINT SIZE')
         psf = tk.Frame(body, bg=_BG_COLOUR)
@@ -378,7 +391,7 @@ class LidarImagerApp(tk.Tk):
                 circle_img = apply_ellipse_mask(rect_img, circle_bbox)
                 self._current_rect_image = rect_img
                 self._current_circle_image = circle_img
-                self._refresh_preview(rect_img)
+                self._refresh_preview(self._composite_onto_bg(rect_img))
                 self._refresh_circle_canvas(circle_img)
 
         # Update status bar regardless of freeze state
@@ -728,10 +741,16 @@ class LidarImagerApp(tk.Tk):
             oy = int(self._bg_y_var.get())
         except ValueError:
             oy = 0
-        composite = self._bg_image.copy()
+        scale = self._bg_scale_var.get() / 100.0
+        if scale != 1.0 and scale > 0:
+            new_w = max(1, round(self._bg_image.width * scale))
+            new_h = max(1, round(self._bg_image.height * scale))
+            bg = self._bg_image.resize((new_w, new_h), Image.LANCZOS)
+        else:
+            bg = self._bg_image.copy()
         fg = rect_img.convert('RGBA')
-        composite.paste(fg, (ox, oy), fg)
-        return composite
+        bg.paste(fg, (ox, oy), fg)
+        return bg
 
     # ── Export folder ──────────────────────────────────────────────────────────
 
