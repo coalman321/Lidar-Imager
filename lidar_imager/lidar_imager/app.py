@@ -126,6 +126,7 @@ class LidarImagerApp(tk.Tk):
         self._name_var = tk.StringVar()
         self._z_min_var = tk.StringVar()
         self._z_max_var = tk.StringVar()
+        self._point_size = tk.IntVar(value=2)
         self._custom_font_path: str | None = None
         self._font_display: str = '(default)'  # display name for font button label
         self._text_color: str = '#FFC500'  # hex colour for name text
@@ -180,20 +181,6 @@ class LidarImagerApp(tk.Tk):
         )
         self._export_btn.pack(side=tk.RIGHT, padx=(0, 4))
 
-        tk.Label(toolbar, text='Pt Size:', bg=_BG_COLOUR, fg='white').pack(
-            side=tk.RIGHT, padx=(16, 2)
-        )
-        self._point_size = tk.IntVar(value=2)
-        pt_slider = tk.Scale(
-            toolbar, variable=self._point_size,
-            from_=1, to=10, resolution=1, orient=tk.HORIZONTAL,
-            length=120, showvalue=True,
-            bg=_BG_COLOUR, fg='white', troughcolor='#444444',
-            highlightthickness=0, bd=0,
-            activebackground=_BG_COLOUR,
-        )
-        pt_slider.pack(side=tk.RIGHT)
-
         # ── Canvas area ────────────────────────────────────────────────────
         canvas_frame = tk.Frame(self, bg=_BG_COLOUR)
         canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8)
@@ -201,7 +188,7 @@ class LidarImagerApp(tk.Tk):
         # Left: 9:13 preview
         left_frame = tk.Frame(canvas_frame, bg=_BG_COLOUR)
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
-        tk.Label(left_frame, text='9:13 Preview', bg=_BG_COLOUR,
+        tk.Label(left_frame, text='Image Preview', bg=_BG_COLOUR,
                  fg='#aaaaaa', font=('TkDefaultFont', 9)).pack()
         self._preview_canvas = tk.Canvas(
             left_frame, width=_PREVIEW_SIZE, height=_PREVIEW_SIZE,
@@ -213,7 +200,7 @@ class LidarImagerApp(tk.Tk):
         # Right: live circle crop
         right_frame = tk.Frame(canvas_frame, bg=_BG_COLOUR)
         right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0))
-        tk.Label(right_frame, text='Circle Crop', bg=_BG_COLOUR,
+        tk.Label(right_frame, text='Button Preview', bg=_BG_COLOUR,
                  fg='#aaaaaa', font=('TkDefaultFont', 9)).pack()
         self._circle_canvas = tk.Canvas(
             right_frame, width=_PREVIEW_SIZE, height=_PREVIEW_SIZE,
@@ -339,7 +326,20 @@ class LidarImagerApp(tk.Tk):
             off_f, text='px  (top-left of 9:13 on background)',
             bg=_BG_COLOUR, fg='#666666', font=('TkDefaultFont', 8),
         ).pack(side=tk.LEFT)
-
+        # ── Point Size ───────────────────────────────────────────────
+        _sep(body, 'POINT SIZE')
+        psf = tk.Frame(body, bg=_BG_COLOUR)
+        psf.pack(fill=tk.X, padx=20, pady=(0, 4))
+        tk.Scale(
+            psf, variable=self._point_size,
+            from_=1, to=10, resolution=1, orient=tk.HORIZONTAL,
+            length=200, showvalue=True,
+            bg=_BG_COLOUR, fg='white', troughcolor='#444444',
+            highlightthickness=0, bd=0,
+            activebackground=_BG_COLOUR,
+        ).pack(side=tk.LEFT)
+        tk.Label(psf, text='px dilation radius', bg=_BG_COLOUR,
+                 fg='#666666', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(6, 0))
         # ── Text Overlay ──────────────────────────────────────────────────
         _sep(body, 'TEXT OVERLAY')
         tf = tk.Frame(body, bg=_BG_COLOUR)
