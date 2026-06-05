@@ -12,7 +12,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2 as pc2
 
-POINTCLOUD_TOPIC = '/demo_pointcloud'
+POINTCLOUD_TOPIC = '/ouster/points'
 
 
 class PointCloudNode(Node):

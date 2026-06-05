@@ -116,21 +116,26 @@ class LidarImagerApp(tk.Tk):
         self._current_circle_image: Image.Image | None = None  # latest circle crop
         self._frozen_rect_image: Image.Image | None = None
         self._frozen_circle_image: Image.Image | None = None
-        self._export_dir: str | None = None
-        self._export_dir_var = tk.StringVar(value='(none — Export will prompt for folder)')
+        _default_export = ''
+        self._export_dir: str | None = _default_export
+        self._export_dir_var = tk.StringVar(value=_default_export)
 
+        _DEFAULT_BG = ''
         self._bg_image: Image.Image | None = None
         self._bg_path_var = tk.StringVar(value='(none)')
-        self._bg_x_var = tk.StringVar(value='0')
-        self._bg_y_var = tk.StringVar(value='0')
-        self._bg_scale_var = tk.DoubleVar(value=100.0)
+        self._bg_x_var = tk.StringVar(value='30')
+        self._bg_y_var = tk.StringVar(value='225')
+        self._bg_scale_var = tk.DoubleVar(value=160.0)
         self._name_var = tk.StringVar()
-        self._z_min_var = tk.StringVar()
-        self._z_max_var = tk.StringVar()
+        self._color_mode = tk.StringVar(value='z')   # 'z' | 'range' | 'x' | 'y'
+        self._val_min_var = tk.StringVar()
+        self._val_max_var = tk.StringVar()
         self._point_size = tk.IntVar(value=2)
-        self._custom_font_path: str | None = None
-        self._font_display: str = '(default)'  # display name for font button label
+        self._custom_font_path: str | None = '/usr/share/fonts/opentype/urw-base35/C059-Bold.otf'
+        self._font_display: str = 'C059 Bold'  # display name for font button label
         self._text_color: str = '#FFC500'  # hex colour for name text
+        self._name_x_offset = tk.IntVar(value=0)
+        self._name_y_offset = tk.IntVar(value=-85)
         self._fonts_cache: list[tuple[str, str]] | None = None
         self._config_dlg: tk.Toplevel | None = None
 
@@ -140,6 +145,7 @@ class LidarImagerApp(tk.Tk):
         self.minsize(800, 560)
 
         self._build_ui()
+        self.after(0, lambda: self._load_bg_from_path(_DEFAULT_BG))
         self._after_id = self.after(_REFRESH_MS, self._update_loop)
 
     # ── UI Construction ────────────────────────────────────────────────────────
@@ -232,9 +238,9 @@ class LidarImagerApp(tk.Tk):
         dlg = tk.Toplevel(self)
         dlg.title('Configuration')
         dlg.configure(bg=_BG_COLOUR)
-        dlg.geometry('500x400')
+        dlg.geometry('520x620')
         dlg.transient(self)
-        dlg.resizable(True, False)
+        dlg.resizable(True, True)
         self._config_dlg = dlg
 
         def _sep(parent: tk.Frame, label: str) -> None:
@@ -249,27 +255,61 @@ class LidarImagerApp(tk.Tk):
                 side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0)
             )
 
-        body = tk.Frame(dlg, bg=_BG_COLOUR)
-        body.pack(fill=tk.BOTH, expand=True)
+        # ── Scrollable body ───────────────────────────────────────────────
+        _scroll_canvas = tk.Canvas(dlg, bg=_BG_COLOUR, highlightthickness=0)
+        _scrollbar = tk.Scrollbar(dlg, orient=tk.VERTICAL, command=_scroll_canvas.yview)
+        _scroll_canvas.configure(yscrollcommand=_scrollbar.set)
+        _scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        _scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        body = tk.Frame(_scroll_canvas, bg=_BG_COLOUR)
+        _body_window = _scroll_canvas.create_window((0, 0), window=body, anchor='nw')
+
+        def _on_body_configure(event: tk.Event) -> None:
+            _scroll_canvas.configure(scrollregion=_scroll_canvas.bbox('all'))
+
+        def _on_canvas_configure(event: tk.Event) -> None:
+            _scroll_canvas.itemconfig(_body_window, width=event.width)
+
+        body.bind('<Configure>', _on_body_configure)
+        _scroll_canvas.bind('<Configure>', _on_canvas_configure)
+
+        # Mouse-wheel scrolling
+        def _on_mousewheel(event: tk.Event) -> None:
+            _scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+
+        dlg.bind('<MouseWheel>', _on_mousewheel)
+        dlg.bind('<Button-4>', lambda e: _scroll_canvas.yview_scroll(-1, 'units'))
+        dlg.bind('<Button-5>', lambda e: _scroll_canvas.yview_scroll(1, 'units'))
 
         # ── Z Range ───────────────────────────────────────────────────────
-        _sep(body, 'Z RANGE')
-        zf = tk.Frame(body, bg=_BG_COLOUR)
-        zf.pack(fill=tk.X, padx=20)
-        tk.Label(zf, text='Min:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        _sep(body, 'COLOR MAPPING')
+        # ── Mode selection ────────────────────────────────────────────────
+        mode_f = tk.Frame(body, bg=_BG_COLOUR)
+        mode_f.pack(fill=tk.X, padx=20, pady=(0, 6))
+        for label, val in [('Z height', 'z'), ('Range', 'range'), ('X depth', 'x'), ('Y lateral', 'y')]:
+            tk.Radiobutton(
+                mode_f, text=label, variable=self._color_mode, value=val,
+                bg=_BG_COLOUR, fg='white', selectcolor='#333333',
+                activebackground=_BG_COLOUR, activeforeground='white',
+            ).pack(side=tk.LEFT, padx=(0, 10))
+        # ── Min / max clamp (applies to whichever mode is selected) ────────
+        tk.Label(body, text='Min / max  (blank = auto):', bg=_BG_COLOUR, fg='#aaaaaa',
+                 font=('TkDefaultFont', 8)).pack(anchor='w', padx=20, pady=(4, 0))
+        vf = tk.Frame(body, bg=_BG_COLOUR)
+        vf.pack(fill=tk.X, padx=20)
         tk.Entry(
-            zf, textvariable=self._z_min_var, width=8,
+            vf, textvariable=self._val_min_var, width=8,
             bg='#333333', fg='white', insertbackground='white',
             relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
-        ).pack(side=tk.LEFT, padx=(2, 14))
-        tk.Label(zf, text='Max:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        ).pack(side=tk.LEFT, padx=(0, 14))
+        tk.Label(vf, text='Max:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
         tk.Entry(
-            zf, textvariable=self._z_max_var, width=8,
+            vf, textvariable=self._val_max_var, width=8,
             bg='#333333', fg='white', insertbackground='white',
             relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
         ).pack(side=tk.LEFT, padx=(2, 10))
         tk.Label(
-            zf, text='(blank = auto)', bg=_BG_COLOUR, fg='#666666',
+            vf, text='(m or units)', bg=_BG_COLOUR, fg='#666666',
             font=('TkDefaultFont', 8),
         ).pack(side=tk.LEFT)
 
@@ -372,6 +412,27 @@ class LidarImagerApp(tk.Tk):
         self._color_swatch.pack(side=tk.LEFT, padx=(10, 4))
         tk.Label(tf, text='Text colour', bg=_BG_COLOUR, fg='#888888',
                  font=('TkDefaultFont', 9)).pack(side=tk.LEFT)
+        # Name offset
+        nof = tk.Frame(body, bg=_BG_COLOUR)
+        nof.pack(fill=tk.X, padx=20, pady=(6, 0))
+        tk.Label(nof, text='Name offset  X:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        tk.Spinbox(
+            nof, textvariable=self._name_x_offset, from_=-2000, to=2000,
+            increment=1, width=6,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+            buttonbackground='#444444',
+        ).pack(side=tk.LEFT, padx=(2, 14))
+        tk.Label(nof, text='Y:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        tk.Spinbox(
+            nof, textvariable=self._name_y_offset, from_=-2000, to=2000,
+            increment=1, width=6,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+            buttonbackground='#444444',
+        ).pack(side=tk.LEFT, padx=(2, 10))
+        tk.Label(nof, text='px  (relative to centred position)',
+                 bg=_BG_COLOUR, fg='#666666', font=('TkDefaultFont', 8)).pack(side=tk.LEFT)
 
     # ── Live update loop ───────────────────────────────────────────────────────
 
@@ -383,8 +444,9 @@ class LidarImagerApp(tk.Tk):
                 rendered = render_front_view(
                     points, _RENDER_SIZE, _RENDER_SIZE,
                     point_size=self._point_size.get(),
-                    z_min_clamp=self._parse_z('min'),
-                    z_max_clamp=self._parse_z('max'),
+                    color_mode=self._color_mode.get(),
+                    val_min_clamp=self._parse_val('min'),
+                    val_max_clamp=self._parse_val('max'),
                 )
                 rect_img = auto_crop_913(rendered)
                 circle_bbox = self._get_circle_bbox(rect_img)
@@ -465,9 +527,10 @@ class LidarImagerApp(tk.Tk):
             )
     # ── Z clamp helpers ────────────────────────────────────────────────────────
 
-    def _parse_z(self, which: str) -> float | None:
-        """Parse the Z min/max entry field; return None if blank or invalid."""
-        raw = (self._z_min_var if which == 'min' else self._z_max_var).get().strip()
+
+    def _parse_val(self, which: str) -> float | None:
+        """Parse the generic min/max field (range/X/Y); return None if blank or invalid."""
+        raw = (self._val_min_var if which == 'min' else self._val_max_var).get().strip()
         if not raw:
             return None
         try:
@@ -666,8 +729,8 @@ class LidarImagerApp(tk.Tk):
         font = self._get_name_font(font_size)
         bbox = draw.textbbox((0, 0), name, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        x = (out.width - tw) // 2
-        y = out.height // 8   # upper portion of image
+        x = (out.width - tw) // 2 + self._name_x_offset.get()
+        y = out.height // 8 + self._name_y_offset.get()   # upper portion of image
         # Dark outline for readability on any background
         for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1), (0, -2), (0, 2), (-2, 0), (2, 0)):
             draw.text((x + dx, y + dy), name, font=font, fill=(0, 0, 0, 200))
@@ -700,6 +763,19 @@ class LidarImagerApp(tk.Tk):
 
     # ── Background image ───────────────────────────────────────────────────────
 
+    def _load_bg_from_path(self, path: str) -> None:
+        """Load *path* as the background image, updating state and status bar."""
+        try:
+            self._bg_image = Image.open(path).convert('RGBA')
+            self._bg_image.load()
+            self._bg_path_var.set(os.path.basename(path))
+            self._status_var.set(
+                f'Background loaded: {os.path.basename(path)}  '
+                f'({self._bg_image.width}×{self._bg_image.height} px)'
+            )
+        except Exception as exc:
+            self._status_var.set(f'Failed to load background: {exc}')
+
     def _set_background(self) -> None:
         """Open a file dialog to select a background PNG and load it."""
         path = filedialog.askopenfilename(
@@ -708,17 +784,7 @@ class LidarImagerApp(tk.Tk):
         )
         if not path:
             return
-        try:
-            self._bg_image = Image.open(path).convert('RGBA')
-            self._bg_image.load()  # decode immediately so the file handle can close
-            import os
-            self._bg_path_var.set(os.path.basename(path))
-            self._status_var.set(
-                f'Background loaded: {os.path.basename(path)}  '
-                f'({self._bg_image.width}×{self._bg_image.height} px)'
-            )
-        except Exception as exc:
-            self._status_var.set(f'Failed to load background: {exc}')
+        self._load_bg_from_path(path)
 
     def _clear_background(self) -> None:
         self._bg_image = None
