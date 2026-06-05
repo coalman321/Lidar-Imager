@@ -133,6 +133,8 @@ class LidarImagerApp(tk.Tk):
         self._val_min_var = tk.StringVar()
         self._val_max_var = tk.StringVar()
         self._point_size = tk.IntVar(value=2)
+        self._ellipse_offset_x = tk.IntVar(value=0)
+        self._ellipse_offset_y = tk.IntVar(value=0)
         self._custom_font_path: str | None = '/usr/share/fonts/opentype/urw-base35/C059-Bold.otf'
         self._font_display: str = 'C059 Bold'  # display name for font button label
         self._text_color: str = '#FFC500'  # hex colour for name text
@@ -399,6 +401,32 @@ class LidarImagerApp(tk.Tk):
         ).pack(side=tk.LEFT)
         tk.Label(psf, text='px dilation radius', bg=_BG_COLOUR,
                  fg='#666666', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(6, 0))
+
+        # ── Ellipse Crop Centre ──────────────────────────────────────
+        _sep(body, 'ELLIPSE CENTER')
+        eof = tk.Frame(body, bg=_BG_COLOUR)
+        eof.pack(fill=tk.X, padx=20, pady=(0, 4))
+        tk.Label(eof, text='Offset  X:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        tk.Spinbox(
+            eof, textvariable=self._ellipse_offset_x, from_=-2000, to=2000,
+            increment=1, width=6,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+            buttonbackground='#444444',
+        ).pack(side=tk.LEFT, padx=(2, 14))
+        tk.Label(eof, text='Y:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        tk.Spinbox(
+            eof, textvariable=self._ellipse_offset_y, from_=-2000, to=2000,
+            increment=1, width=6,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+            buttonbackground='#444444',
+        ).pack(side=tk.LEFT, padx=(2, 10))
+        tk.Label(
+            eof, text='px  (+Y moves down, −Y moves up)',
+            bg=_BG_COLOUR, fg='#666666', font=('TkDefaultFont', 8),
+        ).pack(side=tk.LEFT)
+
         # ── Text Overlay ──────────────────────────────────────────────────
         _sep(body, 'TEXT OVERLAY')
         tf = tk.Frame(body, bg=_BG_COLOUR)
@@ -456,7 +484,12 @@ class LidarImagerApp(tk.Tk):
                 )
                 rect_img = auto_crop_913(rendered)
                 circle_bbox = self._get_circle_bbox(rect_img)
-                circle_img = apply_ellipse_mask(rect_img, circle_bbox)
+                circle_img = apply_ellipse_mask(
+                    rect_img,
+                    circle_bbox,
+                    offset_x=self._ellipse_offset_x.get(),
+                    offset_y=self._ellipse_offset_y.get(),
+                )
                 self._current_rect_image = rect_img
                 self._current_circle_image = circle_img
                 self._refresh_preview(self._composite_onto_bg(rect_img))
@@ -854,6 +887,10 @@ class LidarImagerApp(tk.Tk):
             self._val_max_var.set(data['val_max'])
         if 'point_size' in data:
             self._point_size.set(int(data['point_size']))
+        if 'ellipse_offset_x' in data:
+            self._ellipse_offset_x.set(int(data['ellipse_offset_x']))
+        if 'ellipse_offset_y' in data:
+            self._ellipse_offset_y.set(int(data['ellipse_offset_y']))
         if 'font_path' in data:
             self._custom_font_path = data['font_path'] or None
         if 'font_display' in data:
@@ -877,6 +914,8 @@ class LidarImagerApp(tk.Tk):
             'val_min': self._val_min_var.get(),
             'val_max': self._val_max_var.get(),
             'point_size': self._point_size.get(),
+            'ellipse_offset_x': self._ellipse_offset_x.get(),
+            'ellipse_offset_y': self._ellipse_offset_y.get(),
             'font_path': self._custom_font_path or '',
             'font_display': self._font_display,
             'text_color': self._text_color,
