@@ -27,6 +27,8 @@ Export saves two PNG files to the configured folder:
 
 from __future__ import annotations
 
+import json
+import os
 import tkinter as tk
 from datetime import datetime
 from tkinter import colorchooser, filedialog, ttk
@@ -53,6 +55,7 @@ _BG_COLOUR = '#1e1e1e'
 _CANVAS_BG = '#111111'
 _CROP_COLOUR = '#00e5ff'   # overlay outline colour
 _CROP_WIDTH = 2            # overlay line width
+_CONFIG_PATH = os.path.expanduser('~/.lidar_imager.json')
 
 
 def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -116,12 +119,11 @@ class LidarImagerApp(tk.Tk):
         self._current_circle_image: Image.Image | None = None  # latest circle crop
         self._frozen_rect_image: Image.Image | None = None
         self._frozen_circle_image: Image.Image | None = None
-        _default_export = ''
-        self._export_dir: str | None = _default_export
-        self._export_dir_var = tk.StringVar(value=_default_export)
+        self._export_dir: str | None = None
+        self._export_dir_var = tk.StringVar(value='')
 
-        _DEFAULT_BG = ''
         self._bg_image: Image.Image | None = None
+        self._bg_file_path: str = ''
         self._bg_path_var = tk.StringVar(value='(none)')
         self._bg_x_var = tk.StringVar(value='30')
         self._bg_y_var = tk.StringVar(value='225')
@@ -139,14 +141,18 @@ class LidarImagerApp(tk.Tk):
         self._fonts_cache: list[tuple[str, str]] | None = None
         self._config_dlg: tk.Toplevel | None = None
 
+        self._load_config()
+
         self.title('LiDAR Imager')
         self.configure(bg=_BG_COLOUR)
         self.resizable(True, True)
         self.minsize(800, 560)
 
         self._build_ui()
-        self.after(0, lambda: self._load_bg_from_path(_DEFAULT_BG))
+        if self._bg_file_path:
+            self.after(0, lambda p=self._bg_file_path: self._load_bg_from_path(p))
         self._after_id = self.after(_REFRESH_MS, self._update_loop)
+        self.protocol('WM_DELETE_WINDOW', self._on_close)
 
     # ── UI Construction ────────────────────────────────────────────────────────
 
@@ -768,6 +774,7 @@ class LidarImagerApp(tk.Tk):
         try:
             self._bg_image = Image.open(path).convert('RGBA')
             self._bg_image.load()
+            self._bg_file_path = path
             self._bg_path_var.set(os.path.basename(path))
             self._status_var.set(
                 f'Background loaded: {os.path.basename(path)}  '
@@ -788,6 +795,7 @@ class LidarImagerApp(tk.Tk):
 
     def _clear_background(self) -> None:
         self._bg_image = None
+        self._bg_file_path = ''
         self._bg_path_var.set('(none)')
         self._status_var.set('Background cleared.')
 
@@ -817,6 +825,74 @@ class LidarImagerApp(tk.Tk):
         fg = rect_img.convert('RGBA')
         bg.paste(fg, (ox, oy), fg)
         return bg
+
+    # ── Config persistence ─────────────────────────────────────────────────────
+
+    def _load_config(self) -> None:
+        """Populate settings from ~/.lidar_imager.json (silently skipped if absent)."""
+        try:
+            with open(_CONFIG_PATH) as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return
+        if data.get('export_dir'):
+            self._export_dir = data['export_dir']
+            self._export_dir_var.set(data['export_dir'])
+        if data.get('bg_file_path'):
+            self._bg_file_path = data['bg_file_path']
+        if 'bg_x' in data:
+            self._bg_x_var.set(str(data['bg_x']))
+        if 'bg_y' in data:
+            self._bg_y_var.set(str(data['bg_y']))
+        if 'bg_scale' in data:
+            self._bg_scale_var.set(float(data['bg_scale']))
+        if 'color_mode' in data:
+            self._color_mode.set(data['color_mode'])
+        if 'val_min' in data:
+            self._val_min_var.set(data['val_min'])
+        if 'val_max' in data:
+            self._val_max_var.set(data['val_max'])
+        if 'point_size' in data:
+            self._point_size.set(int(data['point_size']))
+        if 'font_path' in data:
+            self._custom_font_path = data['font_path'] or None
+        if 'font_display' in data:
+            self._font_display = data['font_display']
+        if 'text_color' in data:
+            self._text_color = data['text_color']
+        if 'name_x_offset' in data:
+            self._name_x_offset.set(int(data['name_x_offset']))
+        if 'name_y_offset' in data:
+            self._name_y_offset.set(int(data['name_y_offset']))
+
+    def _save_config(self) -> None:
+        """Write current settings to ~/.lidar_imager.json."""
+        data = {
+            'export_dir': self._export_dir or '',
+            'bg_file_path': self._bg_file_path,
+            'bg_x': self._bg_x_var.get(),
+            'bg_y': self._bg_y_var.get(),
+            'bg_scale': self._bg_scale_var.get(),
+            'color_mode': self._color_mode.get(),
+            'val_min': self._val_min_var.get(),
+            'val_max': self._val_max_var.get(),
+            'point_size': self._point_size.get(),
+            'font_path': self._custom_font_path or '',
+            'font_display': self._font_display,
+            'text_color': self._text_color,
+            'name_x_offset': self._name_x_offset.get(),
+            'name_y_offset': self._name_y_offset.get(),
+        }
+        try:
+            with open(_CONFIG_PATH, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+
+    def _on_close(self) -> None:
+        """Save config then destroy the window."""
+        self._save_config()
+        self.destroy()
 
     # ── Export folder ──────────────────────────────────────────────────────────
 
