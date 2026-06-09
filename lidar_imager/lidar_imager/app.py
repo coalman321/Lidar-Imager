@@ -133,6 +133,10 @@ class LidarImagerApp(tk.Tk):
         self._val_min_var = tk.StringVar()
         self._val_max_var = tk.StringVar()
         self._point_size = tk.IntVar(value=2)
+        self._ellipse_offset_x = tk.IntVar(value=0)
+        self._ellipse_offset_y = tk.IntVar(value=0)
+        self._pdf_print_large = tk.BooleanVar(value=True)
+        self._pdf_print_small = tk.BooleanVar(value=True)
         self._custom_font_path: str | None = '/usr/share/fonts/opentype/urw-base35/C059-Bold.otf'
         self._font_display: str = 'C059 Bold'  # display name for font button label
         self._text_color: str = '#FFC500'  # hex colour for name text
@@ -399,6 +403,47 @@ class LidarImagerApp(tk.Tk):
         ).pack(side=tk.LEFT)
         tk.Label(psf, text='px dilation radius', bg=_BG_COLOUR,
                  fg='#666666', font=('TkDefaultFont', 8)).pack(side=tk.LEFT, padx=(6, 0))
+
+        # ── Ellipse Crop Centre ──────────────────────────────────────
+        _sep(body, 'ELLIPSE CENTER')
+        eof = tk.Frame(body, bg=_BG_COLOUR)
+        eof.pack(fill=tk.X, padx=20, pady=(0, 4))
+        tk.Label(eof, text='Offset  X:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        tk.Spinbox(
+            eof, textvariable=self._ellipse_offset_x, from_=-2000, to=2000,
+            increment=1, width=6,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+            buttonbackground='#444444',
+        ).pack(side=tk.LEFT, padx=(2, 14))
+        tk.Label(eof, text='Y:', bg=_BG_COLOUR, fg='white').pack(side=tk.LEFT)
+        tk.Spinbox(
+            eof, textvariable=self._ellipse_offset_y, from_=-2000, to=2000,
+            increment=1, width=6,
+            bg='#333333', fg='white', insertbackground='white',
+            relief=tk.FLAT, highlightthickness=1, highlightbackground='#555555',
+            buttonbackground='#444444',
+        ).pack(side=tk.LEFT, padx=(2, 10))
+        tk.Label(
+            eof, text='px  (+Y moves down, −Y moves up)',
+            bg=_BG_COLOUR, fg='#666666', font=('TkDefaultFont', 8),
+        ).pack(side=tk.LEFT)
+
+        # ── PDF Circles ───────────────────────────────────────────────────
+        _sep(body, 'PDF CIRCLES')
+        pcf = tk.Frame(body, bg=_BG_COLOUR)
+        pcf.pack(fill=tk.X, padx=20, pady=(0, 4))
+        tk.Checkbutton(
+            pcf, text='Print large circle (2.25")', variable=self._pdf_print_large,
+            bg=_BG_COLOUR, fg='white', selectcolor='#333333',
+            activebackground=_BG_COLOUR, activeforeground='white',
+        ).pack(side=tk.LEFT, padx=(0, 20))
+        tk.Checkbutton(
+            pcf, text='Print small circle (1.25")', variable=self._pdf_print_small,
+            bg=_BG_COLOUR, fg='white', selectcolor='#333333',
+            activebackground=_BG_COLOUR, activeforeground='white',
+        ).pack(side=tk.LEFT)
+
         # ── Text Overlay ──────────────────────────────────────────────────
         _sep(body, 'TEXT OVERLAY')
         tf = tk.Frame(body, bg=_BG_COLOUR)
@@ -456,7 +501,12 @@ class LidarImagerApp(tk.Tk):
                 )
                 rect_img = auto_crop_913(rendered)
                 circle_bbox = self._get_circle_bbox(rect_img)
-                circle_img = apply_ellipse_mask(rect_img, circle_bbox)
+                circle_img = apply_ellipse_mask(
+                    rect_img,
+                    circle_bbox,
+                    offset_x=self._ellipse_offset_x.get(),
+                    offset_y=self._ellipse_offset_y.get(),
+                )
                 self._current_rect_image = rect_img
                 self._current_circle_image = circle_img
                 self._refresh_preview(self._composite_onto_bg(rect_img))
@@ -854,6 +904,14 @@ class LidarImagerApp(tk.Tk):
             self._val_max_var.set(data['val_max'])
         if 'point_size' in data:
             self._point_size.set(int(data['point_size']))
+        if 'ellipse_offset_x' in data:
+            self._ellipse_offset_x.set(int(data['ellipse_offset_x']))
+        if 'ellipse_offset_y' in data:
+            self._ellipse_offset_y.set(int(data['ellipse_offset_y']))
+        if 'pdf_print_large' in data:
+            self._pdf_print_large.set(bool(data['pdf_print_large']))
+        if 'pdf_print_small' in data:
+            self._pdf_print_small.set(bool(data['pdf_print_small']))
         if 'font_path' in data:
             self._custom_font_path = data['font_path'] or None
         if 'font_display' in data:
@@ -877,6 +935,10 @@ class LidarImagerApp(tk.Tk):
             'val_min': self._val_min_var.get(),
             'val_max': self._val_max_var.get(),
             'point_size': self._point_size.get(),
+            'ellipse_offset_x': self._ellipse_offset_x.get(),
+            'ellipse_offset_y': self._ellipse_offset_y.get(),
+            'pdf_print_large': self._pdf_print_large.get(),
+            'pdf_print_small': self._pdf_print_small.get(),
             'font_path': self._custom_font_path or '',
             'font_display': self._font_display,
             'text_color': self._text_color,
@@ -915,23 +977,44 @@ class LidarImagerApp(tk.Tk):
     # ── Export ─────────────────────────────────────────────────────────────────
 
     def _export_circle_pdf(self, circle_src: Image.Image, base_path: str) -> str:
-        """Export a PDF containing two circles (2.25" and 1.25") plus name text.
+        """Export a PDF with the selected circles (large 2.25", small 1.25") plus name text.
 
-        Both circles are rendered from *circle_src* (RGBA, transparent outside
-        the ellipse) at 300 DPI so the printed sizes are exact.
+        Which circles are included is controlled by the PDF CIRCLES checkboxes.
+        Circles are rendered at 300 DPI so printed sizes are exact.
         Returns the saved PDF path.
         """
         DPI     = 300
-        LARGE_D = round(2.25 * DPI)   # 675 px  → 2.25" diameter
-        SMALL_D = round(1.25 * DPI)   # 375 px  → 1.25" diameter
-        MARGIN  = round(0.20 * DPI)   # 60 px   → 0.20" margin
-        GAP     = round(0.25 * DPI)   # 75 px   → 0.25" gap between circles
+        LARGE_D = round(2.25 * DPI)   # 675 px → 2.25"
+        SMALL_D = round(1.25 * DPI)   # 375 px → 1.25"
+        MARGIN  = round(0.20 * DPI)   # 60 px  → 0.20" margin
+        GAP     = round(0.25 * DPI)   # 75 px  → 0.25" gap between circles
+
+        print_large = self._pdf_print_large.get()
+        print_small = self._pdf_print_small.get()
 
         name = self._name_var.get().strip()
         name_area = round(0.42 * DPI) if name else round(0.10 * DPI)
 
-        page_w = MARGIN + LARGE_D + GAP + SMALL_D + MARGIN
-        page_h = MARGIN + LARGE_D + name_area + MARGIN
+        # Build page width from whichever circles are enabled
+        tallest = 0
+        col_w = 0
+        if print_large:
+            tallest = max(tallest, LARGE_D)
+            col_w += LARGE_D
+        if print_small:
+            tallest = max(tallest, SMALL_D)
+            if col_w:
+                col_w += GAP
+            col_w += SMALL_D
+        if col_w == 0:
+            # Nothing to print — return early with an empty page
+            page = Image.new('RGB', (MARGIN * 2 + LARGE_D, MARGIN * 2 + LARGE_D), (255, 255, 255))
+            pdf_path = f'{base_path}_circles.pdf'
+            page.save(pdf_path, format='PDF', resolution=DPI)
+            return pdf_path
+
+        page_w = MARGIN + col_w + MARGIN
+        page_h = MARGIN + tallest + name_area + MARGIN
         page   = Image.new('RGB', (page_w, page_h), (255, 255, 255))
 
         def _paste(src: Image.Image, diameter: int, x: int, y: int) -> None:
@@ -940,15 +1023,16 @@ class LidarImagerApp(tk.Tk):
             patch.paste(rgba.convert('RGB'), (0, 0), rgba)
             page.paste(patch, (x, y))
 
-        # Large circle — left, top-aligned with margin
-        _paste(circle_src, LARGE_D, MARGIN, MARGIN)
-
-        # Small circle — right, vertically centred relative to large
-        _paste(
-            circle_src, SMALL_D,
-            MARGIN + LARGE_D + GAP,
-            MARGIN + (LARGE_D - SMALL_D) // 2,
-        )
+        cursor_x = MARGIN
+        if print_large:
+            _paste(circle_src, LARGE_D, cursor_x, MARGIN)
+            cursor_x += LARGE_D + GAP
+        if print_small:
+            _paste(
+                circle_src, SMALL_D,
+                cursor_x,
+                MARGIN + (tallest - SMALL_D) // 2,
+            )
 
         # Name text — centred below both circles, scaled to fit
         if name:

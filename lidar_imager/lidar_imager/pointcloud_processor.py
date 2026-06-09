@@ -278,7 +278,12 @@ def auto_crop_913(image: Image.Image) -> Image.Image:
 # ── Shape masking for export ───────────────────────────────────────────────────
 
 
-def apply_ellipse_mask(image: Image.Image, bbox: tuple[int, int, int, int]) -> Image.Image:
+def apply_ellipse_mask(
+    image: Image.Image,
+    bbox: tuple[int, int, int, int],
+    offset_x: int = 0,
+    offset_y: int = 0,
+) -> Image.Image:
     """Return *image* cropped to *bbox* with an ellipse alpha mask applied.
 
     Pixels inside the inscribed ellipse are kept; pixels outside are made
@@ -292,7 +297,13 @@ def apply_ellipse_mask(image: Image.Image, bbox: tuple[int, int, int, int]) -> I
         Source PIL.Image (will be converted to RGBA internally).
     bbox:
         (left, top, right, bottom) in image pixel coordinates defining the
-        bounding box of the ellipse.
+        base bounding box of the ellipse.
+    offset_x, offset_y:
+        Pixel translation applied to the ellipse centre (and the matching
+        crop window).  Positive *offset_x* moves the ellipse to the right,
+        positive *offset_y* moves it down.  The size of the ellipse is
+        unchanged; only its centre is shifted.  The crop window is clamped
+        to the source image to avoid sampling outside its bounds.
 
     Returns
     -------
@@ -302,10 +313,23 @@ def apply_ellipse_mask(image: Image.Image, bbox: tuple[int, int, int, int]) -> I
 
     img = image.convert('RGBA')
 
-    # Build an L-mode mask: white (255) inside the ellipse, black (0) outside
+    left, top, right, bottom = bbox
+    crop_w = right - left
+    crop_h = bottom - top
+
+    # Shift the bbox by the requested offset, then clamp so the crop
+    # window stays inside the source image (preserving its size).
+    dx = int(offset_x)
+    dy = int(offset_y)
+    new_left = max(0, min(img.width  - crop_w, left + dx))
+    new_top  = max(0, min(img.height - crop_h, top  + dy))
+    shifted_bbox = (new_left, new_top, new_left + crop_w, new_top + crop_h)
+
+    # Build an L-mode mask: white (255) inside the ellipse, black (0) outside.
+    # The ellipse is drawn at the shifted bbox so its centre moves with it.
     mask = Image.new('L', img.size, 0)
     draw = ImageDraw.Draw(mask)
-    draw.ellipse(bbox, fill=255)
+    draw.ellipse(shifted_bbox, fill=255)
 
     # Replace alpha channel with the ellipse mask
     r, g, b, a = img.split()
@@ -314,8 +338,8 @@ def apply_ellipse_mask(image: Image.Image, bbox: tuple[int, int, int, int]) -> I
     )
     masked = Image.merge('RGBA', (r, g, b, a))
 
-    # Crop to the bounding box so the output is visibly elliptical
-    return masked.crop(bbox)
+    # Crop to the shifted bounding box so the output is visibly elliptical
+    return masked.crop(shifted_bbox)
 
 
 def crop_to_box(image: Image.Image, bbox: tuple[int, int, int, int]) -> Image.Image:
