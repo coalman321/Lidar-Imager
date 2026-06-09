@@ -29,3 +29,40 @@ The tool can export the projected point cloud in two formats:
 [PNG Export Example](./doc/png_export.png)
 - PDF: A single-page PDF with two circular crops of the projected point cloud, designed for printing. also includes a name for the point cloud, which can be customized.
 [PDF Export Example](./doc/pdf_export.pdf)
+
+
+## Setup
+This package was designed for ROS2 Jazzy on Ubuntu 24.04. It should work with other versions of ROS2 but may need some modifications. Clone this package into your ROS2 workspace and clone the `ouster-ros` package if you want to run this package with an Ouster lidar sensor.
+
+```
+cd ros2_ws/src
+vcs import < Lidar-Imager/lidar_imager/setup/lidar_imager.repos --recursive
+```
+
+Compile
+```
+cd ros2_ws
+colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+```
+
+Source the workspace
+```
+source install/setup.bash
+```
+
+## Operation
+
+### Lidar_Imager Node Only
+The node defaults to a pointcloud2 topic of `/ouster/points`.
+```
+ros2 run lidar_imager lidar_imager
+```
+
+### Ouster Example
+Ensure to properly configure the parameters for the ouster. This launch file will utilize the configuration in this repo at `Lidar-Imager/lidar_imager/config/driver_params.yaml`, not the configuration located within `ouster-ros`. 
+
+Start the launch file that will start both the ouster lidar driver and the lidar_imager.
+
+```
+ros2 launch lidar_imager lidar_imager.launch.py
+```
